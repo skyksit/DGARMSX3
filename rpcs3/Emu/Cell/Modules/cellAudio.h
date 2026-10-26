@@ -490,6 +490,7 @@ public:
 	u64 m_report_untouched_mixes = 0;  // periods mixed with at least one untouched port buffer
 	u64 m_report_progress_waits = 0;   // 500us waits for an in-progress buffer
 	u64 m_report_skips = 0;            // periods advanced without the game writing (sampling skip)
+	u64 m_report_incomplete_waits = 0; // 250us waits for an incomplete buffer (Incomplete Block Wait)
 	f32 m_average_playtime = 0.0f;
 	bool m_backend_failed = false;
 	bool m_audio_should_restart = false;

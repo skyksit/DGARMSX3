@@ -352,6 +352,11 @@ struct cfg_root : cfg::node
 		// cost of some latency -- so it is off unless you are recording.
 		cfg::_bool recording_compatible{ this, "Recording Compatible", false, true };
 		cfg::_bool disable_sampling_skip{ this, "Disable Sampling Skip", false, true };
+		// dgplayer: how long (us) past the end of a period cellAudio keeps waiting for a port buffer the
+		// game stopped writing part way ("incomplete") before mixing it as it is. 0 keeps the old
+		// behaviour (mix at once). A late guest mixer otherwise plays half-written blocks: torn audio
+		// while the queue level and underrun count both look healthy.
+		cfg::_int<0, 5000> incomplete_block_wait_us{ this, "Incomplete Block Wait", 0, true };
 		// Which backend cubeb should use, or empty for its own auto-selection.
 		//
 		// Android compiles aaudio, opensl and audiotrack, and cubeb's auto order picks AAudio

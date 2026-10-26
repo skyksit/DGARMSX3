@@ -1143,7 +1143,7 @@ void cell_audio_thread::operator()()
 
 				cellAudio.notice("Audio buffer: queued=%.1fms target=%.1fms (%.0f%%) period=%.0f%% "
 					"blocks=%u ports=%u untouched=%u avg=%.2f ratio=%.2f underruns=%u "
-					"mixes=%llu incomplete=%llu untouched_mix=%llu progress_waits=%llu skips=%llu",
+					"mixes=%llu incomplete=%llu untouched_mix=%llu progress_waits=%llu skips=%llu incomplete_waits=%llu",
 					enqueued_playtime / 1000.0,
 					desired_duration_adjusted / 1000.0,
 					desired_duration_rate * 100.0f,
@@ -1158,10 +1158,11 @@ void cell_audio_thread::operator()()
 					m_report_incomplete_mixes,
 					m_report_untouched_mixes,
 					m_report_progress_waits,
-					m_report_skips);
+					m_report_skips,
+					m_report_incomplete_waits);
 
 				m_report_mixes = m_report_incomplete_mixes = m_report_untouched_mixes = 0;
-				m_report_progress_waits = m_report_skips = 0;
+				m_report_progress_waits = m_report_skips = m_report_incomplete_waits = 0;
 			}
 
 			const s64 time_left = m_dynamic_period - time_since_last_period;
@@ -1224,6 +1225,17 @@ void cell_audio_thread::operator()()
 				cellAudio.trace("waiting: in_progress=%u/%u, enqueued_buffers=%u", in_progress, active_ports, enqueued_buffers);
 				m_report_progress_waits++;
 				thread_ctrl::wait_for(500);
+				continue;
+			}
+
+			// dgplayer: give a buffer the game stopped writing part way a little longer before mixing it
+			// as it is. Once the game resumes writing, its tags move and the buffer reads as in progress,
+			// which the wait above already handles; only a guest that is simply late gets the grace.
+			if (incomplete > 0 && g_cfg.audio.incomplete_block_wait_us > 0 &&
+				time_since_last_period < m_dynamic_period + static_cast<u64>(g_cfg.audio.incomplete_block_wait_us.get()))
+			{
+				m_report_incomplete_waits++;
+				thread_ctrl::wait_for(250);
 				continue;
 			}
 
