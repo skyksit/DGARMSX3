@@ -23,7 +23,9 @@
 
 #include "util/types.hpp"
 #include "FrameGenConfig.h"
-#include "Config.h"
+// dgplayer: was "Config.h", which does not resolve on Linux CI (Utilities/ is not an include dir;
+// the repo root is). Utilities/Config.h is the only Config.h in the tree.
+#include "Utilities/Config.h"
 
 #include <algorithm>
 #include <cstddef>

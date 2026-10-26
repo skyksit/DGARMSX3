@@ -97,7 +97,9 @@ jobs:
 
       - name: Build core (long)
         run: |
-          PATH="$CMAKE_BIN:$PATH" ninja -C build-android android/libarmsx3-core.so
+          # -k 0: 실패한 TU 가 있어도 끝까지 돌려 오류를 한 번에 모은다(업스트림은 macOS 에서만 빌드돼
+          # 리눅스에서만 드러나는 include 대소문자 문제가 있었다). 실패 여부는 ninja 종료 코드로 그대로 판정.
+          PATH="$CMAKE_BIN:$PATH" ninja -k 0 -C build-android android/libarmsx3-core.so
           ls -la build-android/android/libarmsx3-core.so
           df -h /
 
