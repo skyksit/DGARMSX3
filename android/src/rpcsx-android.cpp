@@ -1301,6 +1301,26 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING,
                 "SaveState failed: turn on Allow save states in the Performance "
                 "settings, then try again."),
+    // dgplayer: these ids had no entry, so every lookup logged "missing from g_strings" -- once per
+    // frame for the shader compile notice. Text is the desktop one (rpcs3qt/localized_emu.h).
+    MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS_TITLE, "Shader Compilation"),
+    MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS_VULKAN, "Building base variant %0..."),
+    MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS_OPENGL_BUILD, "Building variant %0..."),
+    MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS_OPENGL_LINK, "Linking variant %0..."),
+    MAKE_STRING(CELL_SAVEDATA_SAVE, "Save"),
+    MAKE_STRING(HOME_MENU_SETTINGS_SYSTEM_START_BIG_PICTURE_MODE, "Open Big Picture Mode On Boot"),
+    MAKE_STRING(HOME_MENU_TROPHY_SYNC_TROPHIES, "Sync trophies"),
+    MAKE_STRING(HOME_MENU_TROPHY_SYNCING_TROPHIES, "Syncing..."),
+    MAKE_STRING(HOME_MENU_TROPHY_SYNC_SUCCESS, "Synced!"),
+    MAKE_STRING(HOME_MENU_TROPHY_SYNC_FAILED, "Sync failed"),
+    MAKE_STRING(BIG_PICTURE_MODE_TITLE, "Big Picture Mode"),
+    MAKE_STRING(BIG_PICTURE_MENU_GAMES, "Games"),
+    MAKE_STRING(BIG_PICTURE_MENU_EXIT, "Exit Big Picture Mode"),
+    MAKE_STRING(BIG_PICTURE_NO_GAMES_FOUND, "No games found.\nAdd games in the main RPCS3 window."),
+    MAKE_STRING(BIG_PICTURE_LOADING, "Loading games..."),
+    MAKE_STRING(BIG_PICTURE_GAME_DETAILS_START, "Start"),
+    MAKE_STRING(BIG_PICTURE_HINT_BACK, "Back"),
+    MAKE_STRING(BIG_PICTURE_HINT_SELECT, "Select"),
 };
 
 #undef MAKE_STRING
@@ -1311,7 +1331,7 @@ static std::pair<std::string, std::u32string> g_strings[] = {
 static_assert(
     std::size(g_strings) ==
         std::size_t(
-            localized_string_id::SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING) +
+            localized_string_id::BIG_PICTURE_HINT_SELECT) +
             1,
     "localized_string_id grew: add the new string(s) to g_strings and move "
     "this to the new last id");

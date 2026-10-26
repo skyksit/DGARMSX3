@@ -1142,7 +1142,8 @@ void cell_audio_thread::operator()()
 				m_last_underruns = underruns_total;
 
 				cellAudio.notice("Audio buffer: queued=%.1fms target=%.1fms (%.0f%%) period=%.0f%% "
-					"blocks=%u ports=%u untouched=%u avg=%.2f ratio=%.2f underruns=%u",
+					"blocks=%u ports=%u untouched=%u avg=%.2f ratio=%.2f underruns=%u "
+					"mixes=%llu incomplete=%llu untouched_mix=%llu progress_waits=%llu skips=%llu",
 					enqueued_playtime / 1000.0,
 					desired_duration_adjusted / 1000.0,
 					desired_duration_rate * 100.0f,
@@ -1152,7 +1153,15 @@ void cell_audio_thread::operator()()
 					untouched,
 					average_playtime_ratio,
 					frequency_ratio,
-					underruns);
+					underruns,
+					m_report_mixes,
+					m_report_incomplete_mixes,
+					m_report_untouched_mixes,
+					m_report_progress_waits,
+					m_report_skips);
+
+				m_report_mixes = m_report_incomplete_mixes = m_report_untouched_mixes = 0;
+				m_report_progress_waits = m_report_skips = 0;
 			}
 
 			const s64 time_left = m_dynamic_period - time_since_last_period;
@@ -1188,6 +1197,7 @@ void cell_audio_thread::operator()()
 					// There's no audio in the buffers, simply advance time and hope the game recovers
 					cellAudio.trace("advancing time: untouched=%u/%u (expected=%u), enqueued_buffers=%llu", untouched, active_ports, untouched_expected, enqueued_buffers);
 					note_untouched(untouched, active_ports);
+					m_report_skips++;
 					advance(timestamp);
 					continue;
 				}
@@ -1212,6 +1222,7 @@ void cell_audio_thread::operator()()
 			if (in_progress > 0)
 			{
 				cellAudio.trace("waiting: in_progress=%u/%u, enqueued_buffers=%u", in_progress, active_ports, enqueued_buffers);
+				m_report_progress_waits++;
 				thread_ctrl::wait_for(500);
 				continue;
 			}
@@ -1231,6 +1242,10 @@ void cell_audio_thread::operator()()
 			// looks like a newly untouched buffer -- so the loop waits out the whole
 			// untouched timeout for it, over and over, for as long as the port exists.
 			note_untouched(untouched, active_ports);
+
+			m_report_mixes++;
+			if (incomplete > 0) m_report_incomplete_mixes++;
+			if (untouched > 0) m_report_untouched_mixes++;
 
 			// Log if we enqueued untouched/incomplete buffers
 			if (untouched > 0 || incomplete > 0)
@@ -1852,6 +1867,9 @@ error_code cellAudioPortOpen(ppu_thread& ppu, vm::ptr<CellAudioPortParam> audioP
 	const u64 num_channels = audioParam->nChannel;
 	const u64 num_blocks = audioParam->nBlock;
 	const u64 attr = audioParam->attr;
+
+	// dgplayer: once per open — the channel/block layout decides which buffer tags the mixer watches.
+	cellAudio.notice("cellAudioPortOpen: nChannel=%llu nBlock=%llu attr=0x%llx", num_channels, num_blocks, attr);
 
 	// check attributes
 	if (num_channels != CELL_AUDIO_PORT_2CH &&

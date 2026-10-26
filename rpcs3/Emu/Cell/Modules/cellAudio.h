@@ -480,6 +480,16 @@ public:
 
 	// Backend underrun total at that line, so the next one can report the delta.
 	u64 m_last_underruns = 0;
+
+	// dgplayer: what the mixer did with the guest's port buffers since the last "Audio buffer:" line.
+	// A block the game has not finished writing is mixed as-is when its tags stopped moving
+	// ("incomplete"), which sounds torn while the queue level still looks healthy, so these are
+	// the counters that tell a late guest mixer apart from a broken output path.
+	u64 m_report_mixes = 0;            // periods mixed
+	u64 m_report_incomplete_mixes = 0; // periods mixed with at least one incomplete port buffer
+	u64 m_report_untouched_mixes = 0;  // periods mixed with at least one untouched port buffer
+	u64 m_report_progress_waits = 0;   // 500us waits for an in-progress buffer
+	u64 m_report_skips = 0;            // periods advanced without the game writing (sampling skip)
 	f32 m_average_playtime = 0.0f;
 	bool m_backend_failed = false;
 	bool m_audio_should_restart = false;
