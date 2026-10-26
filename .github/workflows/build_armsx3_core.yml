@@ -1,0 +1,208 @@
+# dsam3/retrople(도스게임플레이어) PS3 코어 빌드 — libarmsx3-core.so + libarmsx3-jni.so (arm64-v8a)
+#
+# ARMSX3 원본은 코어를 APK jniLibs 에 넣지만, dsam3 는 CDN({STORE}/cores/{ver}/arm64-v8a/)
+# 에서 받아 filesDir 에 두고 글루(System.load) → 코어(RPCSX.openLibrary = dlopen 절대경로)
+# 순서로 연다. 그래서 APK 가 아니라 .so 만 산출한다.
+#
+# 산출물
+#   cores/  libarmsx3-core.so  — RPCS3 코어(LLVM 22 정적 링크, strip)
+#           libarmsx3-jni.so   — JNI 글루(Java_net_rpcsx_RPCSX_*, libadrenotools 정적)
+#           libEGL_angle.so / libGLESv2_angle.so — GLES 렌더러용 ANGLE 프리빌트(저장소 jniLibs 그대로)
+#   hooklibs/ adrenotools hook 4종 — 커스텀 GPU 드라이버(Turnip). 글루의 libadrenotools 와 같은 커밋 빌드여야 한다.
+#
+# ⚠ 글루와 코어 사이엔 ABI 버전 검사가 없다(dlsym 성공 여부뿐) — 반드시 같은 빌드의 두 파일을 함께 배포.
+#
+# 게이트 (하나라도 실패하면 배포 금지)
+#   1. ELF LOAD 정렬 0x4000 (Android 15+ 16KB 페이지)
+#   2. DT_NEEDED 가 시스템 라이브러리 허용 목록 안인지
+#   3. 필수 심볼 — 코어 _rpcsx_*, 글루 Java_net_rpcsx_RPCSX_*
+#
+# 빌드 대상은 build-variants.sh 의 a13 변종(API 33, armv8.2-a+dotprod+fp16)과 같다.
+name: Build ARMSX3 core for dsam3
+
+on:
+  workflow_dispatch:
+    inputs:
+      android_api:
+        description: 'ANDROID_PLATFORM API level (33 = a13 variant)'
+        default: '33'
+      arm_march:
+        description: 'ARMSX3_ARM_MARCH'
+        default: 'armv8.2-a+dotprod+fp16'
+  push:
+    tags:
+      - 'armsx3core-v*'
+
+env:
+  NDK_VERSION: '29.0.14206865'
+  CMAKE_VERSION: '3.30.5'
+  # 저장소에 서브모듈이 아닌 외부 체크아웃 2개 — 커밋 고정(재현성).
+  # libadrenotools 8fae8ce = DGARMSX2(PS2) 와 같은 커밋 → hook lib 호환.
+  LIBADRENOTOOLS_SHA: '8fae8ce254dfc1344527e05301e43f37dea2df80'
+  LIBRASHADER_SHA: '07ac790cdb9826f37cf8e1daf5011f03e3c4daa7'
+
+jobs:
+  build-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+
+    permissions:
+      contents: write  # armsx3core-v* 태그 빌드 시 Release 첨부
+
+    steps:
+      - name: Free disk space
+        # LLVM + RPCS3 빌드 디렉터리가 수십 GB — 기본 러너 여유 공간으로는 부족하다.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc /usr/local/share/boost \
+            /usr/local/lib/node_modules /opt/hostedtoolcache/CodeQL "$AGENT_TOOLSDIRECTORY"
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0  # stamp-git-version.sh 가 rev-list --count 를 쓴다
+
+      - name: Fetch non-submodule third party (pinned)
+        run: |
+          git clone https://github.com/SnowflakePowered/librashader 3rdparty/librashader
+          git -C 3rdparty/librashader checkout "$LIBRASHADER_SHA"
+          git clone https://github.com/bylaws/libadrenotools android/armsx3-ui/app/src/main/cpp/libadrenotools
+          git -C android/armsx3-ui/app/src/main/cpp/libadrenotools checkout "$LIBADRENOTOOLS_SHA"
+          git -C android/armsx3-ui/app/src/main/cpp/libadrenotools submodule update --init --recursive
+
+      - name: Install NDK / CMake
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "ndk;$NDK_VERSION" "cmake;$CMAKE_VERSION"
+          echo "NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "CMAKE_BIN=$ANDROID_HOME/cmake/$CMAKE_VERSION/bin" >> "$GITHUB_ENV"
+          echo "LLVM_BIN=$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_ENV"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: armsx3-core-${{ inputs.android_api || '33' }}
+          max-size: 4G
+
+      - name: Configure core
+        run: |
+          bash android/stamp-git-version.sh
+          NDK_VERSION="$NDK_VERSION" ANDROID_API="${{ inputs.android_api || '33' }}" BUILD_DIR="$PWD/build-android" \
+            bash android/configure.sh \
+              "-DARMSX3_ARM_MARCH=${{ inputs.arm_march || 'armv8.2-a+dotprod+fp16' }}" \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build core (long)
+        run: |
+          PATH="$CMAKE_BIN:$PATH" ninja -C build-android android/libarmsx3-core.so
+          ls -la build-android/android/libarmsx3-core.so
+          df -h /
+
+      - name: Build JNI glue + adrenotools hook libs
+        # Gradle 없이 글루 CMake 만 직접 구성. flurry/savers/discord 타깃은 빌드하지 않는다.
+        # STL 은 코어와 같은 c++_static 이어야 한다(.so 경계로 std::string 을 주고받음).
+        run: |
+          "$CMAKE_BIN/cmake" -S android/armsx3-ui/app/src/main/cpp -B build-glue -G Ninja \
+            -DCMAKE_MAKE_PROGRAM="$CMAKE_BIN/ninja" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_ROOT/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${{ inputs.android_api || '33' }}" \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release
+          PATH="$CMAKE_BIN:$PATH" ninja -C build-glue armsx3-jni hook_impl main_hook file_redirect_hook gsl_alloc_hook
+          find build-glue -name '*.so' -exec ls -la {} \;
+
+      - name: Strip and stage
+        run: |
+          mkdir -p out
+          "$LLVM_BIN/llvm-strip" --strip-unneeded -o out/libarmsx3-core.so build-android/android/libarmsx3-core.so
+          "$LLVM_BIN/llvm-strip" --strip-unneeded -o out/libarmsx3-jni.so "$(find build-glue -name libarmsx3-jni.so -print -quit)"
+          cp android/armsx3-ui/app/src/main/jniLibs/arm64-v8a/libEGL_angle.so out/
+          cp android/armsx3-ui/app/src/main/jniLibs/arm64-v8a/libGLESv2_angle.so out/
+          mkdir -p hooklibs
+          for lib in libhook_impl.so libmain_hook.so libfile_redirect_hook.so libgsl_alloc_hook.so; do
+            f=$(find build-glue -name "$lib" -print -quit)
+            if [ -n "$f" ]; then "$LLVM_BIN/llvm-strip" --strip-unneeded -o "hooklibs/$lib" "$f"
+            else echo "::warning::$lib 미생성 — 커스텀 GPU 드라이버 경로 동작 안 함"; fi
+          done
+          ls -la out hooklibs
+
+      - name: "Gate 1: 16KB page alignment"
+        run: |
+          FAIL=0
+          for so in out/libarmsx3-core.so out/libarmsx3-jni.so hooklibs/*.so; do
+            BAD=$(readelf -lW "$so" | gawk '$1=="LOAD" { if (strtonum($NF) < 0x4000) print }')
+            if [ -n "$BAD" ]; then echo "::error::$so LOAD 정렬 < 0x4000"; readelf -lW "$so" | grep LOAD; FAIL=1
+            else echo "OK: $so"; fi
+          done
+          # ANGLE 은 저장소 프리빌트 — 정렬만 보고(경고), 실패 처리는 하지 않는다.
+          for so in out/libEGL_angle.so out/libGLESv2_angle.so; do
+            BAD=$(readelf -lW "$so" | gawk '$1=="LOAD" { if (strtonum($NF) < 0x4000) print }')
+            [ -n "$BAD" ] && echo "::warning::$so 는 4KB 정렬 — 16KB 기기에서 GLES 렌더러 사용 불가"
+          done
+          exit $FAIL
+
+      - name: "Gate 2: DT_NEEDED allowlist"
+        run: |
+          ALLOW='^lib(c|m|dl|log|z|android|nativewindow|mediandk|amidi|aaudio|OpenSLES|vulkan|EGL|GLESv2|GLESv3|camera2ndk|sync|binder_ndk)\.so$'
+          FAIL=0
+          for so in out/libarmsx3-core.so out/libarmsx3-jni.so; do
+            echo "== $so"; readelf -d "$so" | grep NEEDED
+            for need in $(readelf -d "$so" | awk '/NEEDED/ {gsub(/[\[\]]/,"",$NF); print $NF}'); do
+              if ! echo "$need" | grep -Eq "$ALLOW"; then
+                echo "::error::$so 허용 목록 밖 DT_NEEDED: $need"; FAIL=1
+              fi
+            done
+          done
+          exit $FAIL
+
+      - name: "Gate 3: required symbols"
+        run: |
+          FAIL=0
+          for sym in _rpcsx_initialize _rpcsx_boot _rpcsx_surfaceEvent _rpcsx_overlayPadData \
+                     _rpcsx_saveStateToSlot _rpcsx_loadStateFromSlot _rpcsx_installFw _rpcsx_settingsSet \
+                     _rpcsx_kill _rpcsx_getState _rpcsx_setCustomDriver; do
+            readelf --dyn-syms -W out/libarmsx3-core.so | grep -qw "$sym" || { echo "::error::코어 심볼 누락: $sym"; FAIL=1; }
+          done
+          for m in openLibrary initialize boot surfaceEvent overlayPadData saveStateToSlot installFw setCustomDriver; do
+            readelf --dyn-syms -W out/libarmsx3-jni.so | grep -q "Java_net_rpcsx_RPCSX_${m}\b" || { echo "::error::글루 JNI 누락: $m"; FAIL=1; }
+          done
+          echo "core _rpcsx_ exports: $(readelf --dyn-syms -W out/libarmsx3-core.so | grep -c ' _rpcsx_')"
+          echo "glue JNI exports:     $(readelf --dyn-syms -W out/libarmsx3-jni.so | grep -c 'Java_net_rpcsx_RPCSX_')"
+          exit $FAIL
+
+      - name: Package deploy layout
+        run: |
+          mkdir -p deploy/cores deploy/hooklibs
+          cp out/*.so deploy/cores/
+          cp hooklibs/*.so deploy/hooklibs/ 2>/dev/null || true
+          {
+            echo "COMMIT=${GITHUB_SHA}"
+            echo "ANDROID_API=${{ inputs.android_api || '33' }}"
+            echo "ARMSX3_ARM_MARCH=${{ inputs.arm_march || 'armv8.2-a+dotprod+fp16' }}"
+            echo "NDK=${NDK_VERSION}"
+            echo "LIBADRENOTOOLS=${LIBADRENOTOOLS_SHA}"
+            echo "LIBRASHADER=${LIBRASHADER_SHA}"
+            date -u +"BUILT_AT=%Y-%m-%dT%H:%M:%SZ"
+          } > deploy/cores/BUILD_INFO.txt
+          (cd deploy && find . -type f -name '*.so' -exec sha256sum {} \; | tee cores/SHA256SUMS)
+          ls -la deploy/cores deploy/hooklibs
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: armsx3-core-arm64-v8a
+          path: deploy/
+
+      - name: Attach to release (tag build only)
+        if: startsWith(github.ref, 'refs/tags/armsx3core-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            deploy/cores/*
+            deploy/hooklibs/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
