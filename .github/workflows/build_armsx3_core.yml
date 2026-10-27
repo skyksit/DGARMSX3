@@ -190,7 +190,16 @@ jobs:
             echo "LIBRASHADER=${LIBRASHADER_SHA}"
             date -u +"BUILT_AT=%Y-%m-%dT%H:%M:%SZ"
           } > deploy/cores/BUILD_INFO.txt
-          (cd deploy && find . -type f -name '*.so' -exec sha256sum {} \; | tee cores/SHA256SUMS)
+          # 코어 오버레이 아이콘(overlay_controls.cpp 가 fs::get_config_dir()+"Icons/ui/" 에서 읽는 PNG).
+          # 없으면 cellSaveData 목록 같은 네이티브 오버레이가 아예 그려지지 않는다(게임 세이브 메뉴 미표시).
+          # zip 루트는 "Icons/ui/..." — 앱이 ps3data/config/ 에 그대로 푼다. 코어와 같은 릴리스로 묶어 짝을 맞춘다.
+          (cd android/armsx3-ui/app/src/main/assets && zip -qr -X "$GITHUB_WORKSPACE/deploy/cores/armsx3_overlay_icons.zip" Icons)
+          ICONS=$(unzip -Z1 deploy/cores/armsx3_overlay_icons.zip | grep -c '\.png$')
+          echo "overlay icons: $ICONS png"
+          if [ "$ICONS" -lt 20 ] || ! unzip -Z1 deploy/cores/armsx3_overlay_icons.zip | grep -qx 'Icons/ui/save.png'; then
+            echo "::error::armsx3_overlay_icons.zip 가 비었거나 save.png 가 없다"; exit 1
+          fi
+          (cd deploy && find . -type f \( -name '*.so' -o -name '*.zip' \) -exec sha256sum {} \; | tee cores/SHA256SUMS)
           ls -la deploy/cores deploy/hooklibs
 
       - name: Upload artifact
