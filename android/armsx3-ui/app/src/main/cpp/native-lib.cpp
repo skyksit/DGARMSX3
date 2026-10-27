@@ -124,6 +124,7 @@ struct RPCSXApi {
   bool (*micTestStart)(std::string_view device);
   float (*micTestLevel)();
   void (*micTestStop)();
+  void (*setLogcatLevel)(int level);
   int32_t (*skylanderLoad)(std::string_view path);
   bool (*skylanderRemove)(int32_t slot);
   int32_t (*skylanderLight)();
@@ -303,6 +304,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.micTestStart = reinterpret_cast<decltype(micTestStart)>(dlsym(handle, "_rpcsx_micTestStart"));
     result.micTestLevel = reinterpret_cast<decltype(micTestLevel)>(dlsym(handle, "_rpcsx_micTestLevel"));
     result.micTestStop = reinterpret_cast<decltype(micTestStop)>(dlsym(handle, "_rpcsx_micTestStop"));
+    result.setLogcatLevel = reinterpret_cast<decltype(setLogcatLevel)>(dlsym(handle, "_rpcsx_setLogcatLevel"));
     result.skylanderLoad = reinterpret_cast<decltype(skylanderLoad)>(dlsym(handle, "_rpcsx_skylanderLoad"));
     result.skylanderRemove = reinterpret_cast<decltype(skylanderRemove)>(dlsym(handle, "_rpcsx_skylanderRemove"));
     result.skylanderLight = reinterpret_cast<decltype(skylanderLight)>(dlsym(handle, "_rpcsx_skylanderLight"));
@@ -1779,6 +1781,14 @@ Java_net_rpcsx_RPCSX_micTestLevel(JNIEnv *, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_net_rpcsx_RPCSX_micTestStop(JNIEnv *, jobject) {
   if (rpcsxLib.micTestStop) rpcsxLib.micTestStop();
+}
+
+// Older cores lack the export; they keep their built-in threshold.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_setLogcatLevel(JNIEnv *, jobject, jint level) {
+  if (!rpcsxLib.setLogcatLevel) return JNI_FALSE;
+  rpcsxLib.setLogcatLevel(level);
+  return JNI_TRUE;
 }
 
 extern "C" JNIEXPORT jint JNICALL

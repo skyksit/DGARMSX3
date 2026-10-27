@@ -260,10 +260,12 @@ static void pgo_flush()
 }
 #endif
 
-// Severity threshold for the logcat mirror. Defaults to warning: notice/trace still reach
-// ARMSX3.log, they just stop costing a logd round trip each. Lower it at runtime when
-// actively debugging on a device.
-static std::atomic<int> g_logcat_min_level{static_cast<int>(logs::level::warning)};
+// Severity threshold for the logcat mirror. Defaults to error: warning/notice/trace still reach
+// ARMSX3.log, they just stop costing a logd round trip each. HLE modules log every call at
+// warning (cellGemUpdateStart, sys_event_queue_create ...), which measured ~280 lines/s on
+// Bayonetta -- all of it diagnostic noise for a player. The host lowers it with
+// _rpcsx_setLogcatLevel (dsam3 debug builds ask for warning) when actively debugging.
+static std::atomic<int> g_logcat_min_level{static_cast<int>(logs::level::error)};
 
 // The reason the first game thread to die of a fatal error gave, until the app takes it
 // (_rpcsx_takeGameError). The game stops where it was when one does, and on screen that is a freeze
@@ -337,6 +339,14 @@ struct LogListener : logs::listener {
     __android_log_write(prio, "ARMSX3", line.c_str());
   }
 } static g_androidLogListener;
+
+// Most verbose level the logcat mirror passes (logs::level: always=0 .. trace=7). Out-of-range
+// values are clamped; the file log is unaffected either way.
+extern "C" void _rpcsx_setLogcatLevel(int level) {
+  level = std::clamp(level, static_cast<int>(logs::level::always),
+                     static_cast<int>(logs::level::trace));
+  g_logcat_min_level.store(level, std::memory_order_relaxed);
+}
 
 // ---------------------------------------------------------------------------
 // Save slot thumbnails.
