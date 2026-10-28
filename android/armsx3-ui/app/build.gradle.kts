@@ -34,8 +34,8 @@ android {
         // agree -- an APK that installs below its core's target is a dlopen failure at boot.
         minSdk = (project.findProperty("armsx3.minSdk") as String?)?.toInt() ?: 33
         targetSdk = 37
-        versionCode = 97
-        versionName = "1.4"
+        versionCode = 100
+        versionName = "1.4.2"
 
         // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
         // onboarding; IN_APP_UPDATER gates the in-app GitHub-release updater.
@@ -219,6 +219,20 @@ android {
         jniLibs.useLegacyPackaging = true
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+// The github APKs compress the app's dex files as well, the way the native libraries above already
+// are: a sideloaded APK is downloaded exactly as built, so this takes about 4 MB off the download.
+// Android unpacks the code at install, which costs about as much on the device, and it is the
+// packaging every app used before AGP started storing dex uncompressed. The play build keeps them
+// uncompressed: Play compresses every download itself, so there it would only grow the install.
+// Set per variant because a packaging block inside a flavor applies to both (see productFlavors).
+androidComponents {
+    onVariants { variant ->
+        if (variant.flavorName == "github") {
+            variant.packaging.dex.useLegacyPackaging.set(true)
         }
     }
 }
