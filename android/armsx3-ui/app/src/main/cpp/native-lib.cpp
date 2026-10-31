@@ -1818,8 +1818,8 @@ Java_net_rpcsx_RPCSX_micTestStop(JNIEnv *, jobject) {
 // Older cores lack the export; they keep their built-in threshold.
 extern "C" JNIEXPORT jboolean JNICALL
 Java_net_rpcsx_RPCSX_setLogcatLevel(JNIEnv *, jobject, jint level) {
-  if (!rpcsxLib.setLogcatLevel) return JNI_FALSE;
-  rpcsxLib.setLogcatLevel(level);
+  if (!coreLib.setLogcatLevel) return JNI_FALSE;
+  coreLib.setLogcatLevel(level);
   return JNI_TRUE;
 }
 
