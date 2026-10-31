@@ -480,7 +480,7 @@ namespace gl
 				sdf_config.transform(static_cast<areaf>(viewport).flipped_vertical(), {ui_scale.x, ui_scale.y});
 
 				program_handle.uniforms["sdf_params"] = color4f(sdf_config.hx, sdf_config.hy, sdf_config.br, sdf_config.bw);
-				program_handle.uniforms["sdf_origin"] = color2f(sdf_config.cx, sdf_config.cy);
+				program_handle.uniforms["sdf_origin"] = color4f(sdf_config.cx, sdf_config.cy, sdf_config.ca, 0.f);
 				program_handle.uniforms["sdf_border_color"] = sdf_config.border_color;
 			}
 
@@ -552,7 +552,14 @@ namespace gl
 
 		const auto& caps = gl::get_driver_caps();
 		const bool stencil_export_supported = caps.ARB_shader_stencil_export_supported;
+#ifdef RSX_GLES
+		// ARMSX3: on ES every colour upload comes through here (see GLTexture.cpp), as on the old
+		// AMD driver, so the plain formats need decoding too. Without them nothing is written and
+		// every texture is black.
+		const bool legacy_format_support = true;
+#else
 		const bool legacy_format_support = caps.subvendor_ATI;
+#endif
 
 		std::pair<std::string_view, std::string> repl_list[] =
 		{

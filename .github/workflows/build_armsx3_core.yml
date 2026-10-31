@@ -15,7 +15,7 @@
 # 게이트 (하나라도 실패하면 배포 금지)
 #   1. ELF LOAD 정렬 0x4000 (Android 15+ 16KB 페이지)
 #   2. DT_NEEDED 가 시스템 라이브러리 허용 목록 안인지
-#   3. 필수 심볼 — 코어 _rpcsx_*, 글루 Java_net_rpcsx_RPCSX_*
+#   3. 필수 심볼 — 코어 _armsx3_* (upstream 1.5.2 에서 _rpcsx_* 에서 개명), 글루 Java_net_rpcsx_RPCSX_* (dsam3 호환으로 옛 이름 유지)
 #
 # 빌드 대상은 build-variants.sh 의 a13 변종(API 33, armv8.2-a+dotprod+fp16)과 같다.
 name: Build ARMSX3 core for dsam3
@@ -86,6 +86,14 @@ jobs:
         with:
           key: armsx3-core-${{ inputs.android_api || '33' }}
           max-size: 4G
+
+      - name: ffmpeg cache
+        # upstream 1.5.2 부터 android/build-ffmpeg.sh 가 configure 단계에서 ffmpeg 8.1.1 을 소스 빌드해
+        # build-ffmpeg/<ver>-arm64-v8a-<레시피 해시>/ 에 둔다. 레시피가 같으면 재사용.
+        uses: actions/cache@v4
+        with:
+          path: build-ffmpeg
+          key: ffmpeg-${{ hashFiles('android/build-ffmpeg.sh') }}
 
       - name: Configure core
         run: |
@@ -164,15 +172,22 @@ jobs:
       - name: "Gate 3: required symbols"
         run: |
           FAIL=0
-          for sym in _rpcsx_initialize _rpcsx_boot _rpcsx_surfaceEvent _rpcsx_overlayPadData \
-                     _rpcsx_saveStateToSlot _rpcsx_loadStateFromSlot _rpcsx_installFw _rpcsx_settingsSet \
-                     _rpcsx_kill _rpcsx_getState _rpcsx_setCustomDriver; do
+          for sym in _armsx3_initialize _armsx3_boot _armsx3_surfaceEvent _armsx3_overlayPadData \
+                     _armsx3_saveStateToSlot _armsx3_loadStateFromSlot _armsx3_installFw _armsx3_settingsSet \
+                     _armsx3_kill _armsx3_getState _armsx3_setCustomDriver _armsx3_setLogcatLevel; do
             readelf --dyn-syms -W out/libarmsx3-core.so | grep -qw "$sym" || { echo "::error::코어 심볼 누락: $sym"; FAIL=1; }
           done
           for m in openLibrary initialize boot surfaceEvent overlayPadData saveStateToSlot installFw setCustomDriver; do
             readelf --dyn-syms -W out/libarmsx3-jni.so | grep -q "Java_net_rpcsx_RPCSX_${m}\b" || { echo "::error::글루 JNI 누락: $m"; FAIL=1; }
           done
-          echo "core _rpcsx_ exports: $(readelf --dyn-syms -W out/libarmsx3-core.so | grep -c ' _rpcsx_')"
+          # 코어가 FindClass 로 부르는 콜백 클래스 — dsam3 호스트는 net.rpcsx 패키지에 둔다.
+          for cls in net/rpcsx/ProgressRepository net/rpcsx/FirmwareRepository net/rpcsx/GameRepository net/rpcsx/GameInfo; do
+            grep -qa "$cls" out/libarmsx3-core.so || { echo "::error::코어 JNI 콜백 클래스 경로 불일치: $cls"; FAIL=1; }
+          done
+          if grep -qa 'com/armsx3/core/' out/libarmsx3-core.so; then
+            echo "::error::코어에 com/armsx3/core/ 클래스 참조가 남아 있음 — dsam3 에서 FindClass 실패"; FAIL=1
+          fi
+          echo "core _armsx3_ exports: $(readelf --dyn-syms -W out/libarmsx3-core.so | grep -c ' _armsx3_')"
           echo "glue JNI exports:     $(readelf --dyn-syms -W out/libarmsx3-jni.so | grep -c 'Java_net_rpcsx_RPCSX_')"
           exit $FAIL
 

@@ -502,6 +502,11 @@ open class MainActivityRuntime : ComponentActivity() {
         @Volatile private var vmStopInProgress = false
         @Volatile private var vmRestartAfterStop = false
         @Volatile private var vmRunLoopActive = false
+        // A run loop took vmRestartAfterStop and queued start(), which has not begun yet. stop()'s
+        // shutdown task finishes after the run loop on a Restart, finds the flag already taken, and
+        // must not then treat the stop as a return to the library: that cleared currentGame, so the
+        // restarted game booted on global settings, without everything set for it in-game.
+        @Volatile private var vmRestartQueued = false
 
         // Quit-after-the-VM-stops latch — set by the "Close Game & Quit" hotkey, or by
         // a frontend-launched game's Close Game. One-shot: read+cleared by
@@ -690,6 +695,7 @@ open class MainActivityRuntime : ComponentActivity() {
                     return
                 }
                 vmRunLoopActive = true
+                vmRestartQueued = false
             }
 
             invoke {
@@ -834,6 +840,7 @@ open class MainActivityRuntime : ComponentActivity() {
                         vmStopInProgress = false
                         if (vmRestartAfterStop) {
                             vmRestartAfterStop = false
+                            vmRestartQueued = true
                             true
                         } else {
                             false
@@ -955,7 +962,7 @@ open class MainActivityRuntime : ComponentActivity() {
             // Safe unconditionally: adrenotools no-ops on non-Adreno hardware and if /dev/kgsl-3d0
             // cannot be opened. Re-applied on every start so turning it off actually releases the
             // clocks on the next boot rather than persisting until reboot.
-            runCatching { net.rpcsx.RPCSX.instance.setGpuTurbo(resolved.ps3.gpuTurbo) }
+            runCatching { com.armsx3.core.ARMSX3.instance.setGpuTurbo(resolved.ps3.gpuTurbo) }
 
             NativeApp.renderUpscalemultiplier(upscale.value)
             // Pin custom Vulkan driver (if any) BEFORE the renderer write —
@@ -982,6 +989,9 @@ open class MainActivityRuntime : ComponentActivity() {
                     android.widget.Toast.makeText(ctx, notice, android.widget.Toast.LENGTH_LONG).show()
                 }
             }
+            // ANGLE or the system GLES driver, from this title's own settings. The launch path set it
+            // from the global ones, and a per-game OpenGL + ANGLE pick has to win before the boot.
+            ctx?.let { applyAngleEnv(it, resolved) }
             when (renderer.value) {
                 "vulkan" -> NativeApp.renderVulkan()
                 "opengl" -> NativeApp.renderOpenGL()
@@ -1235,7 +1245,7 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             // Its own staging name: the library scan may be probing at the same time.
             val staged = com.armsx2.DiscIcons.fileFor("__external")
-            val info = org.json.JSONObject(net.rpcsx.RPCSX.instance.probeDiscInfo(target, staged.absolutePath))
+            val info = org.json.JSONObject(com.armsx3.core.ARMSX3.instance.probeDiscInfo(target, staged.absolutePath))
             val id = info.optString("titleId").takeIf { it.isNotBlank() }
             if (id != null && info.optBoolean("icon") && staged.length() > 0L && !com.armsx2.DiscIcons.has(id)) {
                 staged.renameTo(com.armsx2.DiscIcons.fileFor(id))
@@ -1286,6 +1296,7 @@ open class MainActivityRuntime : ComponentActivity() {
                         vmStopInProgress = false
                         if (vmRestartAfterStop) {
                             vmRestartAfterStop = false
+                            vmRestartQueued = true
                             true
                         } else {
                             false
@@ -1417,8 +1428,10 @@ open class MainActivityRuntime : ComponentActivity() {
                 println("@@ANDROID_STOP_JAVA@@ shutdown_return active=${NativeApp.hasActiveVM()} runLoop=$vmRunLoopActive state=${eState.value}")
                 if (!vmRunLoopActive && (eState.value == EmuState.STOPPED || !NativeApp.hasActiveVM())) {
                     eState.value = EmuState.STOPPED
+                    var restartQueued = false
                     val restartNow = synchronized(vmLifecycleLock) {
                         vmStopInProgress = false
+                        restartQueued = vmRestartQueued
                         if (vmRestartAfterStop) {
                             vmRestartAfterStop = false
                             true
@@ -1428,7 +1441,7 @@ open class MainActivityRuntime : ComponentActivity() {
                     }
                     if (restartNow) {
                         start()
-                    } else {
+                    } else if (!restartQueued) {
                         synchronized(vmLifecycleLock) {
                             WindowImpl.toolbarVisible.value = true
                             WindowImpl.showLibrary.value = false
@@ -1578,16 +1591,20 @@ open class MainActivityRuntime : ComponentActivity() {
 
         /** ANGLE (GLES-on-Vulkan) for the OpenGL renderer. Ported from sashkinbro/EmuCoreX:
          *  when the AndroidUseAngleOpenGL setting is on AND the renderer is OpenGL, point the
-         *  ARMSX2_ANGLE_EGL_LIBRARY / _GLES_LIBRARY env vars at the bundled ANGLE .so in the
-         *  native-lib dir; GLContextEGL::LoadEGL (native) then loads ANGLE's EGL instead of the
-         *  system GLES driver — useful where the native GLES stack is broken (e.g. some MediaTek
-         *  Mali). Cleared otherwise. Env vars are read by native getenv in this same process, so
-         *  this Kotlin call is the whole hook. MUST run before the GS thread opens the GL context,
-         *  so it's invoked at emucore init and before each game launch. Renderer restart applies a
-         *  live toggle (like the GPU-profile override). Uses the GLOBAL settings; per-game renderer
-         *  overrides are out of scope for v1. */
-        fun applyAngleEnv(context: Context) {
-            val settings = runCatching { com.armsx2.config.ConfigStore.loadGlobal() }.getOrNull()
+         *  ARMSX3_ANGLE_EGL_LIBRARY / _GLES_LIBRARY env vars at the bundled ANGLE .so in the
+         *  native-lib dir; gl::es::egl_initialize (OpenGL_ES.cpp) then loads ANGLE's EGL instead
+         *  of the system GLES driver — useful where the native GLES stack is broken (e.g. some
+         *  MediaTek Mali). Cleared otherwise. Env vars are read by native getenv in this same
+         *  process, so this Kotlin call is the whole hook. MUST run before the RSX thread opens the
+         *  GL context: at emucore init, before each game launch, and from applyRendererPrefs with
+         *  the title's own [settings], which is the call that decides. A changed pick takes over
+         *  at the next boot, Apply & Restart included, once the previous GL renderer is gone.
+         *
+         *  These were set as ARMSX2_ANGLE_*, ARMSX2's names, while the native side reads
+         *  ARMSX3_ANGLE_*, so ANGLE could not have loaded even with OpenGL picked. */
+        fun applyAngleEnv(context: Context, gameSettings: com.armsx2.config.Settings? = null) {
+            val settings = gameSettings
+                ?: runCatching { com.armsx2.config.ConfigStore.loadGlobal() }.getOrNull()
             val eligible = settings?.useAngleOpenGL == true && settings.renderer == "opengl"
             val libDir = context.applicationInfo.nativeLibraryDir
             val egl = File(libDir, "libEGL_angle.so")
@@ -1598,13 +1615,13 @@ open class MainActivityRuntime : ComponentActivity() {
             val ctx = "renderer=${settings?.renderer} useAngle=${settings?.useAngleOpenGL} gsBackThread=${settings?.gsBackThreadMode}"
             try {
                 if (eligible && egl.exists() && gles.exists()) {
-                    android.system.Os.setenv("ARMSX2_ANGLE_EGL_LIBRARY", egl.absolutePath, true)
-                    android.system.Os.setenv("ARMSX2_ANGLE_GLES_LIBRARY", gles.absolutePath, true)
+                    android.system.Os.setenv("ARMSX3_ANGLE_EGL_LIBRARY", egl.absolutePath, true)
+                    android.system.Os.setenv("ARMSX3_ANGLE_GLES_LIBRARY", gles.absolutePath, true)
                     android.util.Log.i("ARMSX2", "ANGLE OpenGL enabled: ${egl.absolutePath}")
                     angleEmit("enabled $ctx egl=${egl.absolutePath}")
                 } else {
-                    runCatching { android.system.Os.unsetenv("ARMSX2_ANGLE_EGL_LIBRARY") }
-                    runCatching { android.system.Os.unsetenv("ARMSX2_ANGLE_GLES_LIBRARY") }
+                    runCatching { android.system.Os.unsetenv("ARMSX3_ANGLE_EGL_LIBRARY") }
+                    runCatching { android.system.Os.unsetenv("ARMSX3_ANGLE_GLES_LIBRARY") }
                     // Distinguish "user never picked ANGLE" from "user picked ANGLE but the
                     // bundled .so isn't in the APK". The latter silently fell back to the system
                     // GLES driver, which reads to the user as "ANGLE is broken" — that silence
@@ -1622,11 +1639,12 @@ open class MainActivityRuntime : ComponentActivity() {
             }
         }
 
-        /** Mirrors the @@JOYCON@@ diagnostic: logcat AND emulog, so a tester's emulog file
-         *  alone answers "did ANGLE actually load?" without needing a live adb logcat. */
+        /** Logcat AND the core log, so a tester's ARMSX3.log alone answers "did ANGLE actually
+         *  load?". NativeApp.emulog only reaches logcat, which on some devices holds under a
+         *  minute of history; the core reports what it then loaded right after this line. */
         private fun angleEmit(msg: String) {
             android.util.Log.i("ARMSX2", "@@ANGLE@@ $msg")
-            runCatching { NativeApp.emulog("@@ANGLE@@ $msg") }
+            runCatching { com.armsx3.core.ARMSX3.instance.logAndroid("@@ANGLE@@ $msg") }
         }
 
         /** A state to boot in place of the game at this launch path, once. See [launchGameFromState]. */
@@ -1720,10 +1738,10 @@ open class MainActivityRuntime : ComponentActivity() {
                     if (currentGame.value != null) return
                     // The core keeps the last game's serial and title until the next boot reads
                     // its disc, which happens while it is loading. Past that, they are this game's.
-                    val booted = when (runCatching { net.rpcsx.RPCSX.getState() }.getOrNull()) {
-                        net.rpcsx.EmulatorState.Ready, net.rpcsx.EmulatorState.Starting,
-                        net.rpcsx.EmulatorState.Running, net.rpcsx.EmulatorState.Paused,
-                        net.rpcsx.EmulatorState.Frozen -> true
+                    val booted = when (runCatching { com.armsx3.core.ARMSX3.getState() }.getOrNull()) {
+                        com.armsx3.core.EmulatorState.Ready, com.armsx3.core.EmulatorState.Starting,
+                        com.armsx3.core.EmulatorState.Running, com.armsx3.core.EmulatorState.Paused,
+                        com.armsx3.core.EmulatorState.Frozen -> true
                         else -> false
                     }
                     // "00000000" is the placeholder the core reports before the disc is
@@ -1767,10 +1785,10 @@ open class MainActivityRuntime : ComponentActivity() {
                 var attempts = 0
                 override fun run() {
                     if (vmStopInProgress || eState.value == EmuState.STOPPED) return
-                    val booted = when (runCatching { net.rpcsx.RPCSX.getState() }.getOrNull()) {
-                        net.rpcsx.EmulatorState.Ready, net.rpcsx.EmulatorState.Starting,
-                        net.rpcsx.EmulatorState.Running, net.rpcsx.EmulatorState.Paused,
-                        net.rpcsx.EmulatorState.Frozen -> true
+                    val booted = when (runCatching { com.armsx3.core.ARMSX3.getState() }.getOrNull()) {
+                        com.armsx3.core.EmulatorState.Ready, com.armsx3.core.EmulatorState.Starting,
+                        com.armsx3.core.EmulatorState.Running, com.armsx3.core.EmulatorState.Paused,
+                        com.armsx3.core.EmulatorState.Frozen -> true
                         else -> false
                     }
                     val serial = if (!booted) null else runCatching { NativeApp.getGameSerial() }.getOrNull()
@@ -2213,7 +2231,7 @@ open class MainActivityRuntime : ComponentActivity() {
             // written to Default.yml last run is overwritten with the default and the app's copy
             // is the one that survives. That part was right. What was wrong is where it ran: this
             // used to sit at the top of kickoffEmucoreInit, 125 lines before initializeOnce, and
-            // the JNI bridge resolves every _rpcsx_ entry point from a library that openLibrary
+            // the JNI bridge resolves every _armsx3_ entry point from a library that openLibrary
             // has not dlopen()ed yet. Every wrapper in native-lib.cpp null checks its function
             // pointer and returns quietly, so the call succeeded at doing nothing, with no
             // throw for runCatching to catch and no log line anywhere.
@@ -3483,7 +3501,7 @@ open class MainActivityRuntime : ComponentActivity() {
                 com.armsx2.ui.home.HomeInputController.active()
             ) {
                 // Square button (or the Menu hotkey) opens settings for the
-                // highlighted cover — the controller equivalent of long-press.
+                // highlighted cover.
                 if (ControllerMappings.hotkeyFor(kc) == ControllerMappings.SysHotkey.MENU ||
                     kc == KeyEvent.KEYCODE_BUTTON_X
                 ) {
@@ -3491,10 +3509,14 @@ open class MainActivityRuntime : ComponentActivity() {
                         com.armsx2.ui.home.HomeInputController.openSelectedSettings()
                     return true
                 }
-                // #267: Y (Triangle) opens the library SEARCH — the requested
-                // single-button access. While the panel is open Y is swallowed
-                // (the panel owns nav; B closes it).
-                if (kc == KeyEvent.KEYCODE_BUTTON_Y) return true
+                // Y (Triangle) opens the highlighted game's long-press menu, the controller
+                // equivalent of long-press. It used to be swallowed here and do nothing: the
+                // library search it once opened (#267) is reached from the Search row instead.
+                if (kc == KeyEvent.KEYCODE_BUTTON_Y) {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
+                        com.armsx2.ui.home.HomeInputController.openSelectedMenu()
+                    return true
+                }
                 // Shoulder buttons drive the touch-only toolbar toggles so the
                 // whole library is controller-reachable: R1 cycles the view mode
                 // (Grid → List → Shelf — "all 3 modes"), L1 cycles the sort order.
@@ -3645,7 +3667,11 @@ open class MainActivityRuntime : ComponentActivity() {
                 ControllerMappings.SysHotkey.LOAD_STATE -> {
                     if (down) {
                         val slot = currentSaveSlot.value
-                        kotlin.concurrent.thread { runCatching { NativeApp.loadStateFromSlot(slot) } }
+                        kotlin.concurrent.thread {
+                            if (!runCatching { NativeApp.loadStateFromSlot(slot) }.getOrDefault(false)) {
+                                reportUnreadableState(slot)
+                            }
+                        }
                     }
                     return true
                 }
@@ -3929,11 +3955,28 @@ open class MainActivityRuntime : ComponentActivity() {
         kotlin.concurrent.thread { runCatching { NativeApp.saveStateToSlot(slot) } }
     }
 
+    // A refused load says nothing on the hotkey and quick-load paths. When the slot holds a
+    // state in a format this build cannot read, which after a savestate format change is every
+    // state made before it, say so rather than leave the press looking ignored.
+    private fun reportUnreadableState(slot: Int) {
+        if (NativeApp.hasStateInSlot(slot) && !NativeApp.isStateSlotReadable(slot)) {
+            runOnUiThread {
+                android.widget.Toast.makeText(
+                    this,
+                    com.armsx2.i18n.I18n.get("savestate.error.incompatible"),
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
     fun loadState(onLoaded: (() -> Unit)? = null) {
         if (blockedByHardcore()) return
         val slot = currentSaveSlot.value
         kotlin.concurrent.thread {
-            runCatching { NativeApp.loadStateFromSlot(slot) }
+            if (!runCatching { NativeApp.loadStateFromSlot(slot) }.getOrDefault(false)) {
+                reportUnreadableState(slot)
+            }
             // Resume/dismiss only AFTER the load lands. The caller used to resume
             // immediately, which raced the async load (the menu resumed the VM before
             // the state was restored) — that's why "Load" appeared to do nothing.
@@ -4033,7 +4076,7 @@ open class MainActivityRuntime : ComponentActivity() {
         android.util.Log.i("ARMSX3-Touch", line)
         // And into the emulator's log, which is the file testers send. logcat alone is why
         // this diagnostic has never appeared in a single report about #132.
-        runCatching { net.rpcsx.RPCSX.instance.logAndroid("touch scale: $line") }
+        runCatching { com.armsx3.core.ARMSX3.instance.logAndroid("touch scale: $line") }
     }
 
     /** Un-scaled physical display size in the current rotation. Only a SEED for the touch-space

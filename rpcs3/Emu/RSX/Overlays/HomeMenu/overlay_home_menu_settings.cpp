@@ -40,7 +40,7 @@ namespace rsx
 			// Custom tab header. Matches the main menu style
 			std::unique_ptr<overlay_element> label_widget = std::make_unique<label>(page->title);
 			label_widget->set_size(300, 60);
-			label_widget->set_font("Arial", 16);
+			label_widget->set_font(16);
 			label_widget->back_color.a = 0.f;
 			label_widget->set_padding(16, 4, 16, 4);
 
@@ -152,6 +152,12 @@ namespace rsx
 		home_menu_settings_video::home_menu_settings_video(s16 x, s16 y, u16 width, u16 height, bool use_separators, home_menu_page* parent)
 			: home_menu_settings_page(x, y, width, height, use_separators, parent, get_localized_string(localized_string_id::HOME_MENU_SETTINGS_VIDEO))
 		{
+#ifndef __ANDROID__
+			// ARMSX3: the app's own menus switch the renderer, and save it with the game's settings.
+			// Written here it would change g_cfg behind them, and the next boot would undo it.
+			add_dropdown(&g_cfg.video.renderer, localized_string_id::HOME_MENU_SETTINGS_VIDEO_RENDERER);
+#endif
+
 			add_unsigned_slider(&g_cfg.video.resolution_scale_percent, localized_string_id::HOME_MENU_SETTINGS_VIDEO_RESOLUTION_SCALE_PERCENT, "%", 25);
 			add_unsigned_slider(&g_cfg.video.min_scalable_dimension, localized_string_id::HOME_MENU_SETTINGS_VIDEO_RESOLUTION_SCALE_THRESHOLD, "px", 1);
 

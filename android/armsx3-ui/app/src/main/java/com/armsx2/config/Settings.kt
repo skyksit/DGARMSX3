@@ -209,7 +209,7 @@ data class Ps3Settings(
     /** SingStar's second singer, the same kind of name; empty for none. */
     val micDevice2: String = "",
     /** Pin Adreno to max clocks: removes DVFS ramp-up stutter in GPU-bound scenes, costs heat
-     *  and battery. Off by default, matching the RPCSX fork this came from. */
+     *  and battery. Off by default, matching the Android fork this came from. */
     val gpuTurbo: Boolean = false,
     /** Stops the core writing any log after startup. A real performance lever on games that
      *  log heavily, but it also destroys the only artifact a bug report can carry, so it is
@@ -577,7 +577,7 @@ data class Settings(
      *  GLES-on-Vulkan translation (bundled libEGL_angle.so / libGLESv2_angle.so).
      *  Useful on devices with a broken native GLES driver (e.g. some MediaTek Mali).
      *  Only takes effect when the renderer is OpenGL; MainActivityRuntime.applyAngleEnv
-     *  turns it into the ARMSX2_ANGLE_EGL_LIBRARY env var that GLContextEGL reads.
+     *  turns it into the ARMSX3_ANGLE_EGL_LIBRARY env var that gl::es::egl_initialize reads.
      *  Applies on game restart. Default off. */
     val useAngleOpenGL: Boolean = false,
     /** EmuCore/GS/OverrideTextureBarriers — -1 Auto / 0 Off / 1 On. */
@@ -1078,11 +1078,11 @@ data class Settings(
      */
     fun applyTo() {
         val batched = emitSink == null && MainActivityRuntime.nativeReady.value
-        if (batched) runCatching { net.rpcsx.RPCSX.instance.settingsBeginBatch() }
+        if (batched) runCatching { com.armsx3.core.ARMSX3.instance.settingsBeginBatch() }
         try {
             applyToInner()
         } finally {
-            if (batched) runCatching { net.rpcsx.RPCSX.instance.settingsEndBatch() }
+            if (batched) runCatching { com.armsx3.core.ARMSX3.instance.settingsEndBatch() }
         }
     }
 
@@ -1461,7 +1461,7 @@ data class Settings(
         //
         // A deliberate change in All Core Settings still wins, because CoreSettingOverrides
         // replays immediately below this.
-        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Vblank Rate", "60") }
+        runCatching { com.armsx3.core.ARMSX3.instance.settingsSet("Video@@Vblank Rate", "60") }
         // Frame limit is deliberately NOT forced here any more.
         //
         // It used to be written to "60" on every push as a belt-and-braces way to reach a 60Hz cap
@@ -1487,7 +1487,7 @@ data class Settings(
         // Nothing is saturated at that point, so the frame is waiting on a dependency chain
         // rather than on throughput, and sleeping to save a core that nobody wants only adds
         // wake-up latency to the chain that is actually holding the frame.
-        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Core@@SPU GETLLAR Busy Waiting Percentage", "100") }
+        runCatching { com.armsx3.core.ARMSX3.instance.settingsSet("Core@@SPU GETLLAR Busy Waiting Percentage", "100") }
         // Compatible Savestate Mode is no longer forced off here; applyTo writes it from
         // ps3.savestateCompatibleMode above, so the two costs it carries -- SPU performance
         // and a 500MB to 3GB state file -- are the user's to accept rather than a decision
@@ -1993,7 +1993,7 @@ data class Settings(
         put("EmuCore/GS", "EnableAdrenoFramebufferFetch", "bool", adrenoFbFetch.toString())
         put("EmuCore/GS", "CoalesceRenderPasses", "bool", coalesceRenderPasses.toString())
         put("EmuCore/GS", "ForceMaliFramebufferFetch", "bool", forceMaliFbFetch.toString())
-        // Parity write (native reads the ARMSX2_ANGLE_EGL_LIBRARY env var set by
+        // Parity write (native reads the ARMSX3_ANGLE_EGL_LIBRARY env var set by
         // MainActivityRuntime.applyAngleEnv, not this key) — kept so the config file
         // reflects the toggle.
         put("EmuCore/GS", "AndroidUseAngleOpenGL", "bool", useAngleOpenGL.toString())

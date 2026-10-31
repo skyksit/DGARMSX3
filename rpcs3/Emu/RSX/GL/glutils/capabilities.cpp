@@ -31,6 +31,17 @@ namespace gl
 	// something ES genuinely does not have.
 	void capabilities::initialize()
 	{
+		// Asked before there is a context. GLGSRender's constructor reads one capability, and the
+		// RSX rework builds the renderer before on_init makes a context current. Every entry point
+		// here is a pointer that load_procs() fills in on_init, so the calls below would jump to
+		// null. Answer from the defaults, as the desktop path does when it finds no context, and
+		// stay uninitialized so the first call with a context reads the real ones. The one asked
+		// for that early, NV_depth_buffer_float, no ES driver has anyway.
+		if (!gl::es::procs_loaded())
+		{
+			return;
+		}
+
 		int ext_count = 0;
 		glGetIntegerv(GL_NUM_EXTENSIONS, &ext_count);
 
@@ -133,8 +144,10 @@ namespace gl
 
 		// Vendor identification. The desktop paths key off Mesa/NVIDIA/AMD/Intel;
 		// on Android it is Qualcomm, ARM, Imagination or ANGLE-over-Vulkan. None of
-		// the desktop vendor workarounds apply, so leave every vendor_* flag false
-		// and just record what we are on.
+		// the desktop vendor workarounds apply, so those flags stay false. Qualcomm's
+		// own driver reports plain "Qualcomm"; ANGLE on an Adreno reports
+		// "Google Inc. (Qualcomm)" and is not that driver.
+		vendor_QUALCOMM_GLES = vendor_string == "qualcomm";
 		rsx_log.notice("[CAPS] GLES vendor='%s' renderer='%s' glsl=%d extensions=%d",
 			vendor_string, renderer_string, glsl_version.version, ext_count);
 
@@ -214,6 +227,8 @@ namespace gl
 		CHECK_EXTENSION_SUPPORT(ARB_shader_storage_buffer_object);
 
 		CHECK_EXTENSION_SUPPORT(ARB_framebuffer_no_attachments);
+
+		CHECK_EXTENSION_SUPPORT(ARB_robustness);
 
 #undef CHECK_EXTENSION_SUPPORT
 

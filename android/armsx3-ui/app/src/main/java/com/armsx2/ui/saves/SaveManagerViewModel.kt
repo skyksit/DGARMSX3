@@ -94,7 +94,15 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
                 state.value = if (ok) {
                     state.value.copy(message = "${I18n.get("touch.stateAction.load")} · ${slotName(slot)}")
                 } else {
-                    state.value.copy(error = "${I18n.get("touch.stateAction.load")} · ${slotName(slot)}")
+                    val unreadable = withContext(Dispatchers.IO) {
+                        runCatching {
+                            NativeApp.hasStateInSlot(slot) && !NativeApp.isStateSlotReadable(slot)
+                        }.getOrDefault(false)
+                    }
+                    state.value.copy(
+                        error = if (unreadable) I18n.get("savestate.error.incompatible")
+                        else "${I18n.get("touch.stateAction.load")} · ${slotName(slot)}"
+                    )
                 }
                 return@launch
             }
@@ -290,7 +298,7 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
      * One game's numbered slots, for the list opened from its long-press in the library.
      *
      * Slots only. The core's own history keeps a copy of every slot save (see
-     * _rpcsx_saveStateToSlot), so listing it too would show each save twice, the second time
+     * _armsx3_saveStateToSlot), so listing it too would show each save twice, the second time
      * under a bare title id and without a picture.
      */
     private fun readGameSlots(game: GameInfo): ReadResult {

@@ -1390,7 +1390,12 @@ a64_mem_info_t decode_a64_mem_inst(u32 inst)
 	// size[31:30]
 	// V[26]
 	// opc[23:22]
-	if ((inst & 0x3B200C00u) == 0x38000000u)
+	//
+	// ARMSX3: and register offset (LDR/STR Wt, [Xn, Xm{, extend}]), bit 21 set and bits 11:10 = 10.
+	// size and opc mean the same in both, and the address comes from the fault, not the instruction.
+	// LLVM emits this form for a RawSPU register write: WET (BLUS30403) stores SPU_NPC with
+	// str w12, [x22, x11] right after creating its raw SPU, and died there undecoded.
+	if ((inst & 0x3B200C00u) == 0x38000000u || (inst & 0x3B200C00u) == 0x38200800u)
 	{
 		const u32 size = (inst >> 30) & 3;
 		const u32 opc  = (inst >> 22) & 3;
@@ -3814,7 +3819,7 @@ const bool s_exception_handler_set = []() -> bool
 #if defined(__APPLE__) || defined(__ANDROID__)
 	// Android too, and not for tidiness: with no handler, SIGBUS takes the default action and
 	// the process dies having written nothing at all -- no line from this handler, no tombstone,
-	// and an RPCSX.log that simply stops mid-sentence. The only record of Borderlands 2 dying
+	// and an ARMSX3.log that simply stops mid-sentence. The only record of Borderlands 2 dying
 	// this way was one Zygote line, "exited due to signal 7 (Bus error)".
 	//
 	// It is a fault class this emulator can genuinely hit. Guest memory is a MAP_SHARED mapping
@@ -3858,7 +3863,7 @@ const bool s_terminate_handler_set = []() -> bool
 		// allocation calls std::terminate again), which recurses forever and buries the real
 		// crash under a stack of aborts. If terminate re-enters, hard-stop without allocating
 		// so there is exactly one clean tombstone.
-		// Ported from ouroboros420/rpcsx (281654906).
+		// Ported from an earlier Android fork (281654906).
 		static atomic_t<int> s_terminating{0};
 
 		if (s_terminating.exchange(1) != 0)
@@ -5267,7 +5272,7 @@ void thread_ctrl::set_thread_affinity_mask(u64 mask)
 	thread_policy_set(mach_thread, THREAD_AFFINITY_POLICY, reinterpret_cast<thread_policy_t>(&policy), !mask ? 0 : 1);
 // NOTE: Android was excluded here upstream, which made every affinity request a
 // silent no-op -- Thread Scheduler Mode looked settable but did nothing. bionic
-// provides pthread_setaffinity_np, and RPCSX runs this path on Android without
+// provides pthread_setaffinity_np, and other Android ports run this path without
 // the carve-out. Failures are already logged rather than fatal.
 #elif (defined(__linux__) || defined(__DragonFly__) || defined(__FreeBSD__))
 	if (!mask)
