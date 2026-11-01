@@ -1,5 +1,9 @@
 package com.armsx2.ui.home
 
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.border
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +15,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -75,13 +80,30 @@ object LibraryKeyboard {
     // name need: "." and ":" (a port), plus "/" "-" "_". They sit where a physical keyboard puts
     // them where possible (". /" after "m") and fill the short rows, so the grid keeps its five
     // rows and still fits a landscape handheld.
-    val rows: List<List<String>> = listOf(
+    private val padRows: List<List<String>> = listOf(
         listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
         listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
         listOf("a", "s", "d", "f", "g", "h", "j", "k", "l", ":"),
         listOf(SHIFT, "z", "x", "c", "v", "b", "n", "m", ".", "/"),
         listOf("-", "_", SPACE, BACKSPACE, CLEAR, DONE),
     )
+
+    /**
+     * XMB mode's keys, laid out as the console's keyboard: the characters in a block, with the
+     * keys that do something down the right, one a row. A row of symbols too, "@" among them, as
+     * an email address (an RPCN account) has to be typed here.
+     */
+    private val xmbRows: List<List<String>> = listOf(
+        listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", BACKSPACE),
+        listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p", SPACE),
+        listOf("a", "s", "d", "f", "g", "h", "j", "k", "l", ":", SHIFT),
+        listOf("z", "x", "c", "v", "b", "n", "m", ".", "/", "-", CLEAR),
+        listOf("@", "_", "!", "?", "#", "&", "'", "+", "=", "~", DONE),
+    )
+
+    private fun xmbKeys(): Boolean = com.armsx2.ui.xmb.XmbMode.active.value && !useSystemIme.value
+
+    val rows: List<List<String>> get() = if (xmbKeys()) xmbRows else padRows
 
     /** Use the Android system IME instead of these on-screen keys. Opt-in: the built-in keyboard
      *  stays the default because it is fully gamepad-navigable, whereas the system IME is not (and
@@ -134,7 +156,7 @@ object LibraryKeyboard {
 
     /** Press the currently-highlighted key. */
     fun press() {
-        val key = rows[row.intValue].getOrNull(col.intValue) ?: return
+        val key = rows.getOrNull(row.intValue)?.getOrNull(col.intValue) ?: return
         pressKey(key)
     }
 
@@ -175,6 +197,11 @@ object LibraryKeyboard {
     @Composable
     fun Overlay(scope: BoxScope) {
         if (!visible.value) return
+        // XMB mode types on a keyboard drawn as the console's: the same keys and the same pad.
+        if (com.armsx2.ui.xmb.XmbMode.active.value && !useSystemIme.value) {
+            XmbPanel(scope)
+            return
+        }
         with(scope) {
         // Dim the library behind, and swallow stray taps so they don't hit covers.
         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.5f)).clickable(enabled = false) {})
@@ -228,6 +255,121 @@ object LibraryKeyboard {
                 }
             }
         }
+        }
+    }
+
+    /**
+     * The key grid drawn as the PS3's on-screen keyboard, for XMB mode: a dark glass panel over the
+     * dimmed XMB, the text in a light field at its head, and the keys as soft panes in the XMB's
+     * font, the selected one lit. Same keys, same pad handling, same touch.
+     */
+    @Composable
+    private fun XmbPanel(scope: BoxScope) {
+        val font = com.armsx2.ui.xmb.rememberXmbFont()
+        val caret = androidx.compose.animation.core.rememberInfiniteTransition(label = "xmb-osk")
+            .animateFloat(1f, 0f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(530), androidx.compose.animation.core.RepeatMode.Reverse), label = "caret")
+        with(scope) {
+            Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)).clickable(enabled = false) {})
+            Column(
+                Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth(0.86f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            listOf(Color(0xE6303036), Color(0xE6141418)),
+                        ),
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Text(
+                    placeholder.value,
+                    color = Color.White.copy(alpha = 0.75f),
+                    fontFamily = font,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.White.copy(alpha = 0.92f))
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (masked.value) "\u2022".repeat(text.value.length) else text.value,
+                        color = Color(0xFF101014),
+                        fontFamily = font,
+                        fontSize = 19.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.StartEllipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Box(Modifier.padding(start = 1.dp).size(2.dp, 22.dp).background(Color(0xFF101014).copy(alpha = caret.value)))
+                }
+                Spacer(Modifier.height(4.dp))
+                rows.forEachIndexed { r, keys ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        keys.forEachIndexed { c, key ->
+                            val selected = row.intValue == r && col.intValue == c
+                            val on = key == SHIFT && shifted.value
+                            val label = glyphOf(key)
+                            // The keys that do something stand apart down the right, as the console's do.
+                            val action = key == BACKSPACE || key == SPACE || key == SHIFT || key == CLEAR || key == DONE
+                            if (action) Spacer(Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .weight(if (action) 2.4f else 1f)
+                                    .height(44.dp)
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(
+                                        when {
+                                            selected -> androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.62f), Color.White.copy(alpha = 0.34f)))
+                                            on -> androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.30f), Color.White.copy(alpha = 0.18f)))
+                                            else -> androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.14f), Color.White.copy(alpha = 0.06f)))
+                                        },
+                                    )
+                                    .border(1.dp, Color.White.copy(alpha = if (selected) 0.85f else 0.16f), RoundedCornerShape(5.dp))
+                                    .clickable {
+                                        row.intValue = r
+                                        col.intValue = c
+                                        pressKey(key)
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    label,
+                                    color = if (selected) Color(0xFF0C0C10) else Color.White,
+                                    fontFamily = font,
+                                    fontSize = if (label.length > 1) 14.sp else 18.sp,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+                // The console's guide along the foot: what the face buttons do here.
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(
+                        "\u25B3" to Color(0xFF3DDC84) to glyphOf(SPACE),
+                        "\u25A1" to Color(0xFFE88BD5) to glyphOf(BACKSPACE),
+                        "\u25CB" to Color(0xFFFF5A5A) to com.armsx2.i18n.I18n.get("xmb.back"),
+                        "START" to Color.White to glyphOf(DONE),
+                    ).forEach { (button, label) ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(button.first, color = button.second, fontFamily = font, fontSize = 14.sp)
+                            Text(" $label", color = Color.White.copy(alpha = 0.85f), fontFamily = font, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
         }
     }
 

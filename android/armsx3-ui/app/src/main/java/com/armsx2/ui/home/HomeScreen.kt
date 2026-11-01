@@ -182,6 +182,14 @@ fun HomeScreen(
         LibraryBackground.ensureLoaded()
         // The saved backgrounds, and what an older version left as the background, kept now.
         withContext(Dispatchers.IO) { LibraryBackground.loadSaved(context) }?.let(LibraryBackground::select)
+        // Themes kept before their XMB icons and sounds were read get them from their .p3t now, and
+        // XMB mode shows them straight away when it is using one.
+        withContext(Dispatchers.IO) {
+            val restored = LibraryBackground.restoreXmbAssets(context)
+            if (restored.any { it.folder.name == com.armsx2.ui.xmb.XmbTheme.selected.value }) {
+                com.armsx2.ui.xmb.XmbTheme.reapply(context)
+            }
+        }
     }
     // The animated background switched itself off because the last run died with it on screen
     // (LibraryBackground.armSaver). Say so -- silently reverting a setting the user chose reads
@@ -204,10 +212,12 @@ fun HomeScreen(
             // is used as picked, as before, provided it is a picture: .p3t files have no image type,
             // so the picker now lists other files too.
             // Either way it is kept (LibraryBackground.saved), so the menu can bring it back later.
+            var theme = false
             val kept = withContext(Dispatchers.IO) {
                 val name = LibraryBackground.displayName(context, picked)
                 when {
                     LibraryBackground.isTheme(context, picked) -> LibraryBackground.importTheme(context, picked).let { outcome ->
+                        theme = true
                         outcome.messageKey to outcome.file?.let {
                             LibraryBackground.keep(context, outcome, outcome.name ?: name ?: "PS3 theme")
                         }
@@ -219,6 +229,11 @@ fun HomeScreen(
                 }
             }
             kept.second?.let(LibraryBackground::select)
+            // The same theme imported again replaces the copy that was there.
+            if (theme) kept.second?.let { entry ->
+                val gone = LibraryBackground.replaceOlder(entry)
+                withContext(Dispatchers.IO) { gone.forEach { runCatching { it.deleteRecursively() } } }
+            }
             kept.first?.let { Toast.makeText(context, I18n.get(it), Toast.LENGTH_LONG).show() }
         }
     }
@@ -267,7 +282,8 @@ fun HomeScreen(
             // brightness, gets a dark scrim; the XMB is our own controlled backdrop (dark at the
             // top where the content sits) and a heavy scrim just muddied its blue into navy, so
             // it gets only a whisper of dimming.
-            val dimming = LibraryChromePreferences.backgroundDimming.value / 100f
+            // None in XMB mode: the console's XMB sits on its wave with no scrim.
+            val dimming = if (com.armsx2.ui.xmb.XmbMode.active.value) 0f else LibraryChromePreferences.backgroundDimming.value / 100f
             val scrimTop = (if (libraryBg == null) 0.06f else 0.55f) * dimming
             val scrimBottom = (if (libraryBg == null) 0.20f else 0.80f) * dimming
             Box(
@@ -283,6 +299,19 @@ fun HomeScreen(
         },
     ) {
         BoxWithConstraints(modifier.fillMaxSize()) {
+            // XMB mode: the XMB in place of the library. This screen's menus and dialogs stay, so a
+            // game's Triangle menu there is the same one the library opens.
+            if (com.armsx2.ui.xmb.XmbMode.active.value) {
+                com.armsx2.ui.xmb.XmbHome(
+                    state = state,
+                    viewModel = viewModel,
+                    onGameMenu = { game ->
+                        menuFromPad = com.armsx2.ui.common.PadInput.active.value
+                        menuGame = game
+                    },
+                )
+                return@BoxWithConstraints
+            }
             val compact = maxWidth < 600.dp
             // Adaptive cells alone give a tablet MORE columns rather than BIGGER art, so scale the
             // cell width. Bigger cells mean bigger covers and fewer, better-spaced columns. Opt-in:
@@ -1395,6 +1424,26 @@ private fun GameMenuAction(glyph: String, label: String, modifier: Modifier = Mo
 @Composable
 internal fun LibraryBackdrop() {
     val context = LocalContext.current
+    // XMB mode has a background of its own: the XMB theme's, or the console's wave in its colour.
+    if (com.armsx2.ui.xmb.XmbMode.active.value) {
+        // The boot animation is the console's own, on its wave, whatever the theme.
+        val theme = com.armsx2.ui.xmb.XmbTheme.entry()?.takeUnless { com.armsx2.ui.xmb.XmbMode.booting.value }
+        if (theme == null) {
+            // The boot animation is the console's, on its wave, whatever the background. One call
+            // for the wave, booting or not: two had the boot's wave view thrown away as the boot
+            // ended and a new one started, which showed the still behind it (a blue flash) and
+            // began the wave again.
+            val booting = com.armsx2.ui.xmb.XmbMode.booting.value
+            when {
+                !booting && LibraryBackground.flurry.value -> SaverBackdrop()
+                !booting && LibraryBackground.animated2D.value -> LibraryWaveBackground(Modifier.fillMaxSize())
+                else -> XmbWave()
+            }
+        } else {
+            SavedBackdrop(Uri.fromFile(theme.picture).toString(), theme.slideshow, theme.scene)
+        }
+        return
+    }
     val libraryBg = LibraryBackground.uri.value
     if (libraryBg == null) {
         // Default: the live PS3-XMB wave (XmbGlView — a GLES3 port of linkev's
@@ -1406,75 +1455,95 @@ internal fun LibraryBackdrop() {
         // bundled still is the cheap floor shown during GL startup (and, once the wave is up,
         // sits hidden behind it). Custom backgrounds below override all of this.
         if (LibraryBackground.flurry.value) {
-            // Flurry, in the same shell as the XMB wave: if GL cannot come up we get the
-            // 2D backdrop rather than a hole, exactly as XmbGlView does below.
-            // Keyed on the selection: an AndroidView factory runs once, so without this
-            // switching saver or preset would leave the old one running.
-            val kind = LibraryBackground.saverKind.value
-            val preset = if (kind == 0) LibraryBackground.flurryPreset.value
-                         else LibraryBackground.rssPreset.value
-            androidx.compose.runtime.key(kind, preset) {
-                var saverGl by remember { mutableStateOf<Boolean?>(null) }
-                if (saverGl == false) {
-                    LibraryWaveBackground(Modifier.fillMaxSize())
-                } else {
-                    AndroidView(
-                        factory = {
-                            SaverGlView(it, LibraryBackground.currentSpec()).apply {
-                                onGlStatus = { ok -> saverGl = ok }
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                        onRelease = { it.stop() },
-                    )
-                }
-            }
+            SaverBackdrop()
         } else if (LibraryBackground.animated2D.value) {
             // User opted into the lightweight 2D animated wave everywhere (#Luminz) — the same
             // backdrop GL-fail devices get; skip the GLES3 XmbGlView entirely.
             LibraryWaveBackground(Modifier.fillMaxSize())
         } else {
-            var xmbGlState by remember { mutableStateOf<Boolean?>(null) } // null=starting, true=up, false=failed
-            if (xmbGlState == false) {
-                LibraryWaveBackground(Modifier.fillMaxSize())
-            } else {
-                Image(
-                    painter = painterResource(R.drawable.library_bg_xmb),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            AndroidView(
-                factory = { XmbGlView(it).apply { onGlStatus = { ok -> xmbGlState = ok } } },
-                modifier = Modifier.fillMaxSize(),
-            )
+            XmbWave()
         }
     } else {
-        // User-picked still image / GIF (Coil handles both), or a dynamic PS3 theme's slides.
-        val slides = LibraryBackground.slideshow.value
-        if (slides != null) {
-            ThemeSlideshow(slides, Modifier.fillMaxSize())
+        SavedBackdrop(libraryBg, LibraryBackground.slideshow.value, LibraryBackground.scene.value)
+    }
+}
+
+/**
+ * The chosen screensaver (Flurry and the rest), in the same shell as the XMB wave: if GL cannot
+ * come up we get the 2D backdrop rather than a hole, exactly as XmbGlView does. Keyed on the
+ * selection: an AndroidView factory runs once, so without this switching saver or preset would
+ * leave the old one running.
+ */
+@Composable
+private fun SaverBackdrop() {
+    val kind = LibraryBackground.saverKind.value
+    val preset = if (kind == 0) LibraryBackground.flurryPreset.value else LibraryBackground.rssPreset.value
+    androidx.compose.runtime.key(kind, preset) {
+        var saverGl by remember { mutableStateOf<Boolean?>(null) }
+        if (saverGl == false) {
+            LibraryWaveBackground(Modifier.fillMaxSize())
         } else {
-            AsyncImage(
-                model = ImageRequest.Builder(context).data(libraryBg).crossfade(true).build(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
-            // A dynamic theme played live, over its still: the still shows until the scene
-            // draws, and stays if it cannot. Keyed so a new theme gets a new view.
-            LibraryBackground.scene.value?.let { live ->
-                androidx.compose.runtime.key(live) {
-                    var sceneGl by remember { mutableStateOf<Boolean?>(null) }
-                    if (sceneGl != false) {
-                        AndroidView(
-                            factory = { ThemeSceneView(it, live).apply { onGlStatus = { ok -> sceneGl = ok } } },
-                            modifier = Modifier.fillMaxSize(),
-                            onRelease = { it.stop() },
-                        )
+            AndroidView(
+                factory = {
+                    SaverGlView(it, LibraryBackground.currentSpec()).apply {
+                        onGlStatus = { ok -> saverGl = ok }
                     }
-                }
+                },
+                modifier = Modifier.fillMaxSize(),
+                onRelease = { it.stop() },
+            )
+        }
+    }
+}
+
+/** The live XMB wave, over the bundled still while GL starts, or the 2D wave when GL cannot. */
+@Composable
+private fun XmbWave() {
+    var xmbGlState by remember { mutableStateOf<Boolean?>(null) } // null=starting, true=up, false=failed
+    if (xmbGlState == false) {
+        LibraryWaveBackground(Modifier.fillMaxSize())
+    } else {
+        Image(
+            painter = painterResource(R.drawable.library_bg_xmb),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+        )
+    }
+    AndroidView(
+        factory = { XmbGlView(it).apply { onGlStatus = { ok -> xmbGlState = ok } } },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
+/**
+ * A saved background: a still picture or GIF (Coil handles both), a dynamic PS3 theme's [slides],
+ * or its scene played [live] over the still.
+ */
+@Composable
+private fun SavedBackdrop(picture: String, slides: LibraryBackground.Slideshow?, live: java.io.File?) {
+    val context = LocalContext.current
+    if (slides != null) {
+        ThemeSlideshow(slides, Modifier.fillMaxSize())
+        return
+    }
+    AsyncImage(
+        model = ImageRequest.Builder(context).data(picture).crossfade(true).build(),
+        contentDescription = null,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Crop,
+    )
+    // A dynamic theme played live, over its still: the still shows until the scene draws, and
+    // stays if it cannot. Keyed so a new theme gets a new view.
+    live?.let { scene ->
+        androidx.compose.runtime.key(scene) {
+            var sceneGl by remember { mutableStateOf<Boolean?>(null) }
+            if (sceneGl != false) {
+                AndroidView(
+                    factory = { ThemeSceneView(it, scene).apply { onGlStatus = { ok -> sceneGl = ok } } },
+                    modifier = Modifier.fillMaxSize(),
+                    onRelease = { it.stop() },
+                )
             }
         }
     }
@@ -2363,7 +2432,14 @@ object HomeInputController {
     }
 
     fun setColumnCount(value: Int) { columns = value.coerceAtLeast(1) }
-    fun active(): Boolean = owner != null
+
+    /** XMB mode: the XMB takes the pad, except while one of its panels shows an app screen, whose
+     *  rows then move with the same registry as everywhere else. */
+    private fun xmb(): Boolean = com.armsx2.ui.xmb.XmbMode.active.value && com.armsx2.ui.xmb.XmbInput.active()
+
+    fun active(): Boolean = owner != null && com.armsx2.ui.xmb.XmbInput.controller?.panel == null &&
+        // The avatar picker, opened from the XMB's RPCN column, takes the pad as settings does
+        !com.armsx2.ui.settings.RpcnAvatarPicker.open.value
 
     /** HomeScreen registers the toolbar button actions here, in visual left→right
      *  order (leading menu button first). */
@@ -2402,6 +2478,7 @@ object HomeInputController {
     }
 
     fun move(dx: Int, dy: Int): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.move(dx, dy)
         val viewModel = owner ?: return false
         userNavigated = true
         // The press that switched from touch to the pad shows where the selection is: nothing was
@@ -2471,6 +2548,7 @@ object HomeInputController {
     }
 
     fun confirm(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.confirm()
         val viewModel = owner ?: return false
         // As in move(): a first press only shows the selection, so it cannot launch a game that
         // was never highlighted.
@@ -2489,6 +2567,7 @@ object HomeInputController {
     }
 
     fun openSelectedSettings(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.square()
         val game = owner?.selectedGame() ?: return false
         com.armsx2.navigation.UiNavigator.navigate(com.armsx2.navigation.AppRoute.Settings(game = game))
         return true
@@ -2498,6 +2577,7 @@ object HomeInputController {
      *  clearing its caches...), which a controller had no way to open. The game is the one
      *  highlighted in the grid, or in the Recently Played row when that has the selector. */
     fun openSelectedMenu(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.options()
         val viewModel = owner ?: return false
         val game = when (zone.value) {
             HomeZone.Grid -> viewModel.selectedGame()
@@ -2509,12 +2589,14 @@ object HomeInputController {
     }
 
     fun scroll(velocity: Float): Boolean {
+        if (xmb()) return true
         if (owner == null) return false
         scrollVelocity.floatValue = if (abs(velocity) > 0.08f) velocity.coerceIn(-1f, 1f) else 0f
         return true
     }
 
     fun back(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.back()
         com.armsx2.MenuSfx.play(com.armsx2.MenuSfx.Event.BACK)
         // B in the Recents / Toolbar zone drops back to the grid; on the grid it
         // opens the nav drawer.
@@ -2530,6 +2612,8 @@ object HomeInputController {
      *  controller direct access to all three view modes without needing to reach
      *  the touch-only toolbar toggle. */
     fun cycleLayout(): Boolean {
+        // The XMB has no layouts to cycle; R1 pages down, as on the console.
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.page(1)
         val viewModel = owner ?: return false
         viewModel.toggleLayout()
         return true
@@ -2537,6 +2621,7 @@ object HomeInputController {
 
     /** Cycle the library sort order (bound to L1). */
     fun cycleSort(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.page(-1)
         val viewModel = owner ?: return false
         val entries = HomeSort.entries
         val next = entries[(viewModel.state.value.sort.ordinal + 1) % entries.size]

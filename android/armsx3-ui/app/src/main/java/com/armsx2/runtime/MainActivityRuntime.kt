@@ -2570,6 +2570,8 @@ open class MainActivityRuntime : ComponentActivity() {
         com.armsx2.ui.home.LibraryScreensaver.load()
         com.armsx2.ui.theme.LauncherOrientationPreferences.load()
         com.armsx2.ui.theme.LibraryBackgroundColorPreferences.load()
+        // After the colours: XMB mode forces the monthly ones while it is up.
+        com.armsx2.ui.xmb.XmbMode.load()
         com.armsx2.LibraryMusic.load()
         com.armsx2.PauseMusic.load()
         com.armsx2.MenuSfx.load(applicationContext)
@@ -3360,6 +3362,10 @@ open class MainActivityRuntime : ComponentActivity() {
                         if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.press()
                     KeyEvent.KEYCODE_BUTTON_X ->
                         if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.backspace()
+                    KeyEvent.KEYCODE_BUTTON_Y ->
+                        if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.pressKey(com.armsx2.ui.home.LibraryKeyboard.SPACE)
+                    KeyEvent.KEYCODE_BUTTON_START ->
+                        if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.pressKey(com.armsx2.ui.home.LibraryKeyboard.DONE)
                     KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK ->
                         if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.close()
                 }
@@ -4598,6 +4604,8 @@ open class MainActivityRuntime : ComponentActivity() {
             com.armsx2.ui.settings.RpcnAvatarPicker.open.value -> com.armsx2.ui.settings.RpcnAvatarPicker.open.value = false
             nav.drawerOpen.value -> nav.drawerOpen.value = false
             WindowImpl.inGameScreen.value != null -> WindowImpl.dismissInGameScreen()
+            // An app screen open in an XMB panel: B closes the panel, back to the XMB behind it.
+            com.armsx2.ui.xmb.XmbInput.controller?.panel != null -> com.armsx2.ui.xmb.XmbInput.controller?.back()
             WindowImpl.showLibrary.value && !onHome -> nav.back()
             WindowImpl.showLibrary.value -> WindowImpl.showLibrary.value = false
             !onHome -> nav.back()
@@ -5656,8 +5664,11 @@ open class MainActivityRuntime : ComponentActivity() {
         runCatching { NativeApp.dumpPgoProfile() }
         // Library music must not keep playing out of a backgrounded app — it would sound
         // like the emulator ignoring the home button. Paused, not stopped, so returning
-        // to the library picks it back up.
-        com.armsx2.LibraryMusic.pause()
+        // to the library picks it back up, and held paused until onResume: XMB mode's music
+        // hands the track back as it stops, which is exactly when the app is leaving.
+        com.armsx2.LibraryMusic.setForeground(false)
+        // The XMB's boot sound plays its ten seconds out past the animation; leaving fades it.
+        com.armsx2.ui.xmb.XmbBootMusic.skip()
         // Pause-menu track was already paused by setForeground(false) at the top of onPause.
         super.onPause()
     }
@@ -5693,7 +5704,9 @@ open class MainActivityRuntime : ComponentActivity() {
 
                     if (invites != null) {
                         com.armsx2.online.OnlineSession.keepAlive(applicationContext)
-                        com.armsx2.ui.friends.RpcnInviteNotice.update(com.armsx2.ui.settings.parseRpcnInvites(invites))
+                        val parsed = com.armsx2.ui.settings.parseRpcnInvites(invites)
+                        com.armsx2.ui.friends.RpcnInviteNotice.update(parsed)
+                        com.armsx2.ui.xmb.XmbRpcn.invites.value = parsed
                     }
                 } else {
                     com.armsx2.ui.friends.RpcnInviteNotice.reset()
@@ -5722,7 +5735,7 @@ open class MainActivityRuntime : ComponentActivity() {
             wasAsleep = false
             com.armsx2.MenuSfx.play(com.armsx2.MenuSfx.Event.WAKE)
             if (prefs.getBoolean("ui.hotkeyToasts", true))
-                com.armsx2.ui.WelcomeBanner.show(com.armsx2.i18n.I18n.get("app.welcomeBack"))
+                com.armsx2.ui.WelcomeBanner.show(com.armsx2.i18n.I18n.get("app.welcomeBack"), welcome = true)
         }
         // #394 backstop: a controller that slept and woke returns with a NEW deviceId, so drop any
         // pad slot whose device is no longer connected — the re-enumerated pad then re-claims Player 1
@@ -5735,6 +5748,7 @@ open class MainActivityRuntime : ComponentActivity() {
         // full app restart (#398-adjacent report). start() rebuilds a released player — and
         // still just un-pauses a merely-paused one — while its own guards keep it a no-op
         // when the setting is off, a VM is running, or that other app is still playing.
+        com.armsx2.LibraryMusic.setForeground(true)
         com.armsx2.LibraryMusic.start(this)
         // Back in the foreground: clear the background guard first, THEN restart the pause track if a
         // menu is still up. The LaunchedEffect won't do it — the overlay states didn't change while

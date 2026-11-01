@@ -696,6 +696,7 @@ object Rpcs3Bridge {
                 "ShaderChainEnabled" ->
                     if (asBool(value)) Rpcs3Settings.setOutputScaling("Shader chain (librashader)")
                 "ShaderChainPreset" -> Rpcs3Settings.setShaderPresetPath(value)
+                "ShaderChainScale" -> Rpcs3Settings.setShaderPresetScale(asInt(value))
                 // The 12 OsdShow* flags are aggregated by NativeApp.osdApplyFlags,
                 // which maps them onto RPCS3's single Enabled + detail_level pair.
                 // Handling them one at a time here would fight that, since each
@@ -1449,6 +1450,12 @@ object Rpcs3Bridge {
     @JvmStatic
     fun dumpFrame(mode: Int): Boolean =
         runCatching { ARMSX3.instance.dumpFrame(mode) }.getOrDefault(false)
+
+    /** The game's frame at its own size, as raw pixels in [rawPath] (read with [thumbnailBitmap]).
+     *  Waits up to a second for a running game's next frame. False without a frame to give. */
+    @JvmStatic
+    fun saveScreenshot(rawPath: String): Boolean =
+        runCatching { ARMSX3.instance.saveScreenshot(rawPath) }.getOrDefault(false)
 
     @JvmStatic
     fun rpcnDeleteTrophies(): String =

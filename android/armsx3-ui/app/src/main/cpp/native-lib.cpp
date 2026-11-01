@@ -1,4 +1,5 @@
 #include <EGL/egl.h>
+#include <cstdint>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
@@ -61,6 +62,7 @@ struct CoreApi {
   void (*openHomeMenu)();
   void (*captureFrame)();
   bool (*dumpFrame)(int mode);
+  bool (*saveScreenshot)(const char *path);
   std::string (*getTitleId)();
   std::string (*getTitle)();
   unsigned long long (*getFramePeriodNs)();
@@ -92,6 +94,13 @@ struct CoreApi {
   std::string (*getUser)();
   std::string (*settingsGet)(std::string_view path);
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
+  // XMB mode (src/xmb-media.cpp): the boot sound and a game's SND0 and ICON1.
+  bool (*xmbDecodeAudio)(std::string_view in, std::string_view out);
+  bool (*xmbDecodePamAudio)(std::string_view in, std::string_view out);
+  std::int64_t (*xmbPamOpen)(std::string_view path);
+  std::int32_t (*xmbPamSize)(std::int64_t handle);
+  std::int64_t (*xmbPamFrame)(std::int64_t handle, std::uint8_t *dst, std::int64_t capacity);
+  void (*xmbPamClose)(std::int64_t handle);
   int (*frameGenImportShaders)(std::string_view path);
   int (*frameGenShaderCount)();
   int (*getPlayCompileState)();
@@ -168,6 +177,7 @@ struct CoreApi {
   int (*patchesWrite)(std::string_view file, std::string_view content);
   std::string (*patchesList)(std::string_view serial);
   std::string (*probeDiscInfo)(std::string_view isoPath, std::string_view iconOut);
+  bool (*xmbDiscMedia)(std::string_view isoPath, std::string_view outDir);
   int (*changeDisc)(std::string_view path);
   int (*discSwapState)();
   std::string (*getDiscPlaylist)();
@@ -241,6 +251,7 @@ struct CoreLibrary : CoreApi {
     result.setAppBackgrounded = reinterpret_cast<decltype(setAppBackgrounded)>(dlsym(handle, "_armsx3_setAppBackgrounded"));
     result.captureFrame = reinterpret_cast<decltype(captureFrame)>(dlsym(handle, "_armsx3_captureFrame"));
     result.dumpFrame = reinterpret_cast<decltype(dumpFrame)>(dlsym(handle, "_armsx3_dumpFrame"));
+    result.saveScreenshot = reinterpret_cast<decltype(saveScreenshot)>(dlsym(handle, "_armsx3_saveScreenshot"));
     result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_armsx3_openHomeMenu"));
     result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_armsx3_getTitleId"));
     result.getTitle = reinterpret_cast<decltype(getTitle)>(dlsym(handle, "_armsx3_getTitle"));
@@ -328,6 +339,12 @@ struct CoreLibrary : CoreApi {
     result.usbPassedThrough = reinterpret_cast<decltype(usbPassedThrough)>(dlsym(handle, "_armsx3_usbPassedThrough"));
     result.takeGameError = reinterpret_cast<decltype(takeGameError)>(dlsym(handle, "_armsx3_takeGameError"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_armsx3_settingsSet"));
+    result.xmbDecodeAudio = reinterpret_cast<decltype(xmbDecodeAudio)>(dlsym(handle, "_armsx3_xmbDecodeAudio"));
+    result.xmbDecodePamAudio = reinterpret_cast<decltype(xmbDecodePamAudio)>(dlsym(handle, "_armsx3_xmbDecodePamAudio"));
+    result.xmbPamOpen = reinterpret_cast<decltype(xmbPamOpen)>(dlsym(handle, "_armsx3_xmbPamOpen"));
+    result.xmbPamSize = reinterpret_cast<decltype(xmbPamSize)>(dlsym(handle, "_armsx3_xmbPamSize"));
+    result.xmbPamFrame = reinterpret_cast<decltype(xmbPamFrame)>(dlsym(handle, "_armsx3_xmbPamFrame"));
+    result.xmbPamClose = reinterpret_cast<decltype(xmbPamClose)>(dlsym(handle, "_armsx3_xmbPamClose"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
     // feature being absent. The Kotlin side treats a null here as "unsupported".
@@ -355,6 +372,7 @@ struct CoreLibrary : CoreApi {
     result.patchesWrite = reinterpret_cast<decltype(patchesWrite)>(dlsym(handle, "_armsx3_patchesWrite"));
     result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_armsx3_patchesList"));
     result.probeDiscInfo = reinterpret_cast<decltype(probeDiscInfo)>(dlsym(handle, "_armsx3_probeDiscInfo"));
+    result.xmbDiscMedia = reinterpret_cast<decltype(xmbDiscMedia)>(dlsym(handle, "_armsx3_xmbDiscMedia"));
     result.changeDisc = reinterpret_cast<decltype(changeDisc)>(dlsym(handle, "_armsx3_changeDisc"));
     result.discSwapState = reinterpret_cast<decltype(discSwapState)>(dlsym(handle, "_armsx3_discSwapState"));
     result.getDiscPlaylist = reinterpret_cast<decltype(getDiscPlaylist)>(dlsym(handle, "_armsx3_getDiscPlaylist"));
@@ -829,6 +847,15 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_captureFrame(JNIEnv *env,
   return coreLib.captureFrame();
 }
 
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_saveScreenshot(JNIEnv *env,
+                                                                    jobject, jstring path) {
+  if (coreLib.saveScreenshot == nullptr || path == nullptr) {
+      return false;
+  }
+
+  return coreLib.saveScreenshot(unwrap(env, path).c_str());
+}
+
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_dumpFrame(JNIEnv *env,
                                                                     jobject, jint mode) {
   if (coreLib.dumpFrame == nullptr) {
@@ -1144,6 +1171,60 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_settingsSet(
   }
 
   return coreLib.settingsSet(unwrap(env, jpath), unwrap(env, jvalue));
+}
+
+// XMB mode's media. Null-safe like the rest: before the core is up these decode nothing, and the
+// XMB plays without the boot sound or a game's music and animated icon.
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_xmbDecodeAudio(
+    JNIEnv *env, jobject, jstring jin, jstring jout) {
+  if (coreLib.xmbDecodeAudio == nullptr) {
+      return false;
+  }
+  return coreLib.xmbDecodeAudio(unwrap(env, jin), unwrap(env, jout));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_xmbDecodePamAudio(
+    JNIEnv *env, jobject, jstring jin, jstring jout) {
+  if (coreLib.xmbDecodePamAudio == nullptr) {
+      return false;
+  }
+  return coreLib.xmbDecodePamAudio(unwrap(env, jin), unwrap(env, jout));
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_net_rpcsx_RPCSX_xmbPamOpen(
+    JNIEnv *env, jobject, jstring jpath) {
+  if (coreLib.xmbPamOpen == nullptr) {
+      return 0;
+  }
+  return coreLib.xmbPamOpen(unwrap(env, jpath));
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_xmbPamSize(
+    JNIEnv *, jobject, jlong handle) {
+  if (coreLib.xmbPamSize == nullptr || handle == 0) {
+      return 0;
+  }
+  return coreLib.xmbPamSize(handle);
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_net_rpcsx_RPCSX_xmbPamFrame(
+    JNIEnv *env, jobject, jlong handle, jobject buffer) {
+  if (coreLib.xmbPamFrame == nullptr || handle == 0 || buffer == nullptr) {
+      return -1;
+  }
+  auto *dst = static_cast<std::uint8_t *>(env->GetDirectBufferAddress(buffer));
+  const jlong capacity = env->GetDirectBufferCapacity(buffer);
+  if (dst == nullptr || capacity <= 0) {
+      return -1;
+  }
+  return coreLib.xmbPamFrame(handle, dst, capacity);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_xmbPamClose(
+    JNIEnv *, jobject, jlong handle) {
+  if (coreLib.xmbPamClose != nullptr && handle != 0) {
+      coreLib.xmbPamClose(handle);
+  }
 }
 
 // Defer the config file write until endBatch. Null-safe like the rest: an older core
@@ -1643,6 +1724,14 @@ Java_net_rpcsx_RPCSX_probeDiscInfo(JNIEnv *env, jobject, jstring jpath,
     return wrap(env, "{}");
   }
   return wrap(env, coreLib.probeDiscInfo(unwrap(env, jpath), unwrap(env, jicon)));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_xmbDiscMedia(JNIEnv *env, jobject, jstring jpath, jstring jout) {
+  if (coreLib.xmbDiscMedia == nullptr) {
+    return false;
+  }
+  return coreLib.xmbDiscMedia(unwrap(env, jpath), unwrap(env, jout));
 }
 
 extern "C" JNIEXPORT jint JNICALL

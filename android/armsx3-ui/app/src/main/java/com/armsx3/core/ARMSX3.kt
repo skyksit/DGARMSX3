@@ -181,6 +181,28 @@ class ARMSX3 {
     external fun systemInfo(): String
     external fun settingsGet(path: String): String
     external fun settingsSet(path: String, value: String): Boolean
+
+    /** XMB mode: [inPath]'s first audio stream (the firmware's AC3 boot sound, a game's ATRAC3
+     *  SND0) as a 16-bit stereo WAV at [outPath], with the core's FFmpeg. */
+    external fun xmbDecodeAudio(inPath: String, outPath: String): Boolean
+
+    /** An ICON1.PAM's audio track (ATRAC3plus) as a WAV; false when it has none or it will not decode. */
+    external fun xmbDecodePamAudio(inPath: String, outPath: String): Boolean
+
+    /** XMB mode: a disc image's PIC1, PIC0, SND0 and ICON1 copied into [outDir]; true when any were. */
+    external fun xmbDiscMedia(isoPath: String, outDir: String): Boolean
+
+    /** XMB mode: a game's animated icon (ICON1.PAM) opened for playback; a handle, or 0. */
+    external fun xmbPamOpen(path: String): Long
+
+    /** Width shl 16 or height of an open icon. */
+    external fun xmbPamSize(handle: Long): Int
+
+    /** The next frame as RGBA into [dst], a direct buffer of width * height * 4; its time in ms,
+     *  or -1 at the end. */
+    external fun xmbPamFrame(handle: Long, dst: java.nio.ByteBuffer): Long
+
+    external fun xmbPamClose(handle: Long)
     // ---- RPCN ----
     //
     // All of these block on the network. Call them off the main thread.
@@ -312,6 +334,10 @@ class ARMSX3 {
     /** Arm a frame dump of the next frame (1 = final image, 2 = every render pass), saved as PNGs to
      *  config/captures/. False when the renderer cannot dump frames. */
     external fun dumpFrame(mode: Int): Boolean
+
+    /** Write the game's frame at its own size to [path] ("AX3T" + u32 width + u32 height + RGBA8):
+     *  a running game's next frame, or a paused game's frame from when it was paused. */
+    external fun saveScreenshot(path: String): Boolean
     external fun loginUser(userId: String)
     external fun getUser(): String
     external fun getTitleId(): String
